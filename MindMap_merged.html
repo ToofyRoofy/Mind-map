@@ -814,7 +814,12 @@ window.undo = undoAll; window.redo = redoAll;
       const S = resolveLineStyle(line), ca = ctr(a), cb = ctr(b), gA = tree && !S.arrowStart ? 0 : LN.gap, gB = tree && !S.arrowEnd ? 0 : LN.gap;
       let pts = null, anchors = null, wps = S.waypoints, dflt = false, curved = false;
       if (tree) {
-        if (S.shape === 'curved') { const s = b.x >= a.x + a.w ? 1 : -1, A = V(a.x + a.w + s * gA, ca.y), B = V(b.x - s * gB, cb.y), mx = (A.x + B.x) / 2; pts = flatCubic(A, V(mx, A.y), V(mx, B.y), B); curved = true; }
+        /* الافتراضي (curved) = نفس اختيار الجانب في النسخة القديمة (port في mm-core): الاتجاه الغالب بين المركزين — أفقي (يمين↔شمال) أو رأسي (تحت↔فوق).
+           الخط بيعيد الالتصاق بالجانب الأنسب لما تحرك الابن، والمنحنى S بنفس نقاط التحكم القديمة. (straight/elbow/polyline بيستخدموا facing). */
+        if (S.shape === 'curved') { const dx = cb.x - ca.x, dy = cb.y - ca.y, vert = Math.abs(dy) > Math.abs(dx) * 1.2, s = (vert ? dy : dx) > 0 ? 1 : -1;
+          if (vert) { const A = V(ca.x, ca.y + s * (a.h / 2 + gA)), B = V(cb.x, cb.y - s * (b.h / 2 + gB)), my = (A.y + B.y) / 2; pts = flatCubic(A, V(A.x, my), V(B.x, my), B); }
+          else { const A = V(ca.x + s * (a.w / 2 + gA), ca.y), B = V(cb.x - s * (b.w / 2 + gB), cb.y), mx = (A.x + B.x) / 2; pts = flatCubic(A, V(mx, A.y), V(mx, B.y), B); }
+          curved = true; }
         else { const f = facing(a, b), pp = ports(f, gA, gB);
           if (S.shape === 'elbow') pts = elbowPts(f, gA, gB);
           else if (S.shape === 'polyline') { if (!wps.length) { wps = [midP(pp[0], pp[1])]; dflt = true; } anchors = [pp[0]].concat(wps, [pp[1]]); pts = anchors; }
@@ -1099,18 +1104,20 @@ window.undo = undoAll; window.redo = redoAll;
       const loadImg = (src, cors) => new Promise(res => { const i = new Image(); if (cors) i.crossOrigin = 'anonymous'; i.onload = () => res(i); i.onerror = () => res(null); i.src = src; });
       async function normSrc(src) { if (okSrc(src)) return src; const i = await loadImg(src); if (!i) return null; /* صيغ مش في القايمة (svg/bmp/avif) → PNG آمن */
         try { const c = document.createElement('canvas'); c.width = i.naturalWidth || 300; c.height = i.naturalHeight || 150; c.getContext('2d').drawImage(i, 0, 0); const o = c.toDataURL('image/png'); return okSrc(o) ? o : null; } catch (_) { return null; } }
-      async function insert(nid, src, nw, nh, alt) { src = await normSrc(src); if (!src) { alert('صيغة الصورة مش مدعومة.'); return null; }
+      /* خصائص إضافية لصورة/معادلة العقدة عند اللصق (من نسخة): rot / locked / مشروع Paint (لو لسه مطابق للصورة) */
+      const keepProps = (x, src) => { const o = {}; if (x) { if (+x.rot) o.rot = Math.round(+x.rot); if (x.locked) o.locked = true; if (src && x.proj && x.pv && x.pv === window.MM_hash(src)) { o.proj = x.proj; o.pv = x.pv; } } return o; };
+      async function insert(nid, src, nw, nh, alt, extra) { src = await normSrc(src); if (!src) { alert('صيغة الصورة مش مدعومة.'); return null; }
         const n0 = C.get(nid); if (!n0) return null; const p = padOf(n0), g = gapOf(n0), ar = (nh || 80) / Math.max(1, nw || 120);
         let w = Math.min(160, Math.max(40, nw || 120)), newW = n0.w; if (w > n0.w - 2 * p) { newW = Math.min(220, Math.max(n0.w, w + 2 * p)); w = Math.min(w, newW - 2 * p); }
         let h = w * ar; if (h > 260) { h = 260; w = h / ar; } const id = mkId();
         C.tx('image', () => { const n = C.get(nid), arr = all(n).slice(), L = valid(n), bottom = L.reduce((m, im) => Math.max(m, (+im.y || 0) + (+im.h || 0)), 0);
-          arr.push({ id, src, x: r2(Math.max(0, (newW - w) / 2)), y: L.length ? r2(bottom + g) : p, w: r2(w), h: r2(h), alt: alt || '' }); apply(nid, arr, 'image', newW !== n.w ? { w: newW } : null); });
+          arr.push(Object.assign({ id, src, x: r2(Math.max(0, (newW - w) / 2)), y: L.length ? r2(bottom + g) : p, w: r2(w), h: r2(h), alt: alt || '' }, keepProps(extra, src))); apply(nid, arr, 'image', newW !== n.w ? { w: newW } : null); });
         pick(nid, id); return id; }
       const cleanEq = t => String(t || '').replace(/[\s\u00a0]+/g, ' ').trim().slice(0, 500);
       function eqNat(text) { const MQ = window.MMEq, ml = MQ ? MQ.mathml(text) : ''; if (!ml) return null; const d = document.createElement('div'); d.style.cssText = 'position:absolute;left:-9999px;top:0;visibility:hidden'; d.innerHTML = '<span class="mq" style="margin:0">' + ml + '</span>'; document.body.appendChild(d); const q = d.firstChild, r = { w: q.offsetWidth, h: q.offsetHeight }; d.remove(); return r.w > 0 && r.h > 0 ? r : null; }
-      function insertEq(nid, text) { text = cleanEq(text); const nt = text && eqNat(text), n0 = C.get(nid); if (!nt || !n0) return null; const p = padOf(n0), g = gapOf(n0); let w = Math.min(nt.w, Math.max(40, n0.w - 2 * p)); const h = w * nt.h / nt.w, id = mkId();
+      function insertEq(nid, text, extra) { text = cleanEq(text); const nt = text && eqNat(text), n0 = C.get(nid); if (!nt || !n0) return null; const p = padOf(n0), g = gapOf(n0); let w = Math.min(nt.w, Math.max(40, n0.w - 2 * p)); const h = w * nt.h / nt.w, id = mkId();
         C.tx('image', () => { const n = C.get(nid), arr = all(n).slice(), L = valid(n), bottom = L.reduce((m, im) => Math.max(m, (+im.y || 0) + (+im.h || 0)), 0);
-          arr.push({ id, eq: text, x: r2(Math.max(0, (n.w - w) / 2)), y: L.length ? r2(bottom + g) : p, w: r2(w), h: r2(h) }); apply(nid, arr, 'image'); });
+          arr.push(Object.assign({ id, eq: text, x: r2(Math.max(0, (n.w - w) / 2)), y: L.length ? r2(bottom + g) : p, w: r2(w), h: r2(h) }, keepProps(extra))); apply(nid, arr, 'image'); });
         pick(nid, id); return id; }
       const newEq = nid => !!(nid && C.get(nid) && window.MMEq && window.MMEq.openFor('', t => { insertEq(nid, t); })); /* زي زرار المعادلة في Rich note: نافذة ← عنصر حر */
       function editEq(nid, iid) { const n = C.get(nid), im = n && imgOf(n, iid); if (!im || !im.eq || !window.MMEq) return;
@@ -1150,7 +1157,7 @@ window.undo = undoAll; window.redo = redoAll;
       function menuAction(el, a) { const nid = el.dataset.nodeId, iid = el.dataset.iid;
         if (a === 'lock') toggleLock(nid, iid); else if (a === 'edit') { const n = C.get(nid), im = n && imgOf(n, iid); if (im && im.eq) editEq(nid, iid); else enterEdit(nid, iid); } else if (a === 'del') remove(nid, iid); else if (a === 'paint') paintOpen(nid, iid);
         else if (a === 'tilt0') { setRot(el, 0); endRot(); } }
-      return { paintOpen, paintApply, isEq: el => { const im = el && el.dataset && imgOf(C.get(el.dataset.nodeId), el.dataset.iid); return !!(im && im.eq); }, padTop, band, sync, afterRefresh: positionBar, insert, insertEq, newEq, editEq, replace, remove, menuAction, setRot, endRot, enterEdit, select: pick,
+      return { getImg: (nid, iid) => { const n = C.get(nid), im = n && imgOf(n, iid); return im ? Object.assign({}, im) : null; }, paintOpen, paintApply, isEq: el => { const im = el && el.dataset && imgOf(C.get(el.dataset.nodeId), el.dataset.iid); return !!(im && im.eq); }, padTop, band, sync, afterRefresh: positionBar, insert, insertEq, newEq, editEq, replace, remove, menuAction, setRot, endRot, enterEdit, select: pick,
         setSize(nid, i, key, val) { const n = C.get(nid), im = n && all(n)[i]; if (!im || !(+im.w > 0)) return; const ar = im.h / im.w; let w = key === 'h' ? val / ar : val; w = Math.max(MINW, Math.min(w, n.w - (+im.x || 0)));
           apply(nid, mapImg(all(n), im.id, { w: r2(w), h: r2(w * ar) }), 'image'); }, /* Inspector: تغيير w أو h بيحافظ على النسبة */
         get selected() { return sel ? Object.assign({}, sel) : null } };
@@ -1258,7 +1265,7 @@ window.undo = undoAll; window.redo = redoAll;
     let ctxMenu = null, longPressTimer = null, longPressArmed = false;
     function closeCtx() { if (ctxMenu) { ctxMenu.remove(); ctxMenu = null; } }
     function showCtx(id, x, y, ensure) { closeCtx(); const items = ((getDoc().data.contextActions) || Object.keys(ACTIONS)).filter(k => ACTIONS[k]); (ensure || []).forEach(k => { if (ACTIONS[k] && !items.includes(k)) items.unshift(k); }); ctxMenu = $('div', { id: 'mmNodeContext' }); ctxMenu.dataset.nid = id; ctxMenu.style.cssText = 'position:fixed;z-index:1900;left:' + Math.max(4, Math.min(innerWidth - 230, x)) + 'px;top:' + Math.max(4, Math.min(innerHeight - 420, y)) + 'px;background:#fff;border:1px solid #999;border-radius:9px;box-shadow:0 8px 26px #0004;padding:5px;min-width:210px;display:grid;gap:2px;direction:rtl';
-      items.forEach(k => { const b = $('button', { type: 'button', textContent: ACTIONS[k], title: ACTIONS[k] }); b.onclick = () => { closeCtx(); actionForNode(k, id); }; ctxMenu.appendChild(b); }); document.body.appendChild(ctxMenu); }
+      items.forEach(k => { const b = $('button', { type: 'button', textContent: ACTIONS[k], title: ACTIONS[k] }); b.onclick = () => { closeCtx(); actionForNode(k, id); }; ctxMenu.appendChild(b); }); if (window.MM.imgClipHas && window.MM.imgClipHas()) { const pb = $('button', { type: 'button', textContent: '📄 لصق صورة/معادلة', title: 'لصق الصورة/المعادلة المنسوخة في العقدة' }); pb.onclick = () => { closeCtx(); window.MM.imgPasteNode(id); }; ctxMenu.appendChild(pb); } document.body.appendChild(ctxMenu); }
     function hitNodeAt(e) { const r = cv.getBoundingClientRect(), v = docData().view || C.ui.view, w = C.toWorld((e.clientX - r.left), (e.clientY - r.top)), id = C.hit(w.x, w.y, 10, true); const o = id && C.get(id); return o && o.type === 'mindnode' ? o : null; }
     cv.addEventListener('contextmenu', e => {
       /* LINE SETTINGS — نقطة التوجيه الوحيدة لـcontextmenu على الكانفس. الأولوية: (1) جسم Node (الأعلى z) → قايمة Node  (2) أقرب خط ضمن التسامح → Line Settings  (3) غير كده → السلوك الافتراضي.
@@ -1302,10 +1309,11 @@ window.undo = undoAll; window.redo = redoAll;
       if (!o) { e.preventDefault(); e.stopImmediatePropagation(); const n = C.create('mindnode', { space: 'mm', parent: null, x: w.x - 60, y: w.y - 20, w: 120, h: 40, data: { title: 'New Topic', richHtml: 'New Topic', order: roots().length, style: { color: theme().node, shape: theme().shape, fontSize: 14 } } }); C.select([n.id]); setTimeout(() => nodeEditor(n.id), 0); } }, true);
     /* لوحة المفاتيح: Tab = فرع، Enter = شقيق — نفس مسار زرار ＋فرع/＋شقيق (mmCreateNodeV2).
        بيشتغل بس لما التركيز جوه #mmTab (نفس نطاق الـlistener القديم في mm-core)، ومن غير عقدة واحدة محددة
-       بيسيب الحدث للـlistener القديم هناك (Delete / F2 / Ctrl+Z / Ctrl+Y لسه هناك). */
+       بيسيب الحدث للـlistener القديم هناك (Delete / Ctrl+Z / Ctrl+Y لسه هناك). F2 = محرر العقدة الغني زي زرار ✎. */
     document.addEventListener('keydown', e => { if (C.ui.space !== 'mm' || !(e.target.closest && e.target.closest('#mmTab'))) return;
       if ([e.target, document.activeElement].some(x => x && (x.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(x.tagName)))) return;
       const n = C.ui.sel.size === 1 ? C.get([...C.ui.sel][0]) : null; if (!n || n.type !== 'mindnode') return;
+      if (e.key === 'F2') { e.preventDefault(); e.stopImmediatePropagation(); nodeEditor(n.id); return; }
       if (e.key === 'Tab' || e.key === 'Enter') { e.preventDefault(); e.stopImmediatePropagation(); mmCreateNodeV2(e.key === 'Tab' ? 'child' : 'sibling'); } }, true);
     document.addEventListener('pointerdown', e => {
       if (editingNode) { const layer = document.getElementById('mmRichLayer2'); const activeEl = layer && layer.querySelector('.mmRichNode2[data-id="' + CSS.escape(editingNode) + '"]'); const insideToolbar = e.target.closest && e.target.closest('#mmNodeFormat2'); const insideNode = activeEl && activeEl.contains(e.target); if (!insideToolbar && !insideNode) closeNodeEditor(true); }
@@ -1550,6 +1558,48 @@ window.undo = undoAll; window.redo = redoAll;
 /* Text Scale: النص بيتكبّر/يتصغّر مع الصندوق — الـbody بيتعرض بـtransform:scale(--ts) وعرضه/ارتفاعه 100%/--ts، فالـHTML والـformatting زي ما هم والنص بيعيد التفاف جوه الحجم الجديد */
 .mmBoxBody{width:calc(100% / var(--ts,1));height:calc(100% / var(--ts,1));transform:scale(var(--ts,1));transform-origin:0 0;overflow:auto;outline:none;font-size:14px;line-height:1.4;cursor:text;min-height:0;unicode-bidi:plaintext}
 .mmBoxBody:empty:before{content:'اكتب هنا...';opacity:.5}
+.mmN2box.tbl{padding:0;min-width:60px}
+.mmN2box.tbl .mmBoxBody{height:auto;overflow:visible;cursor:default}
+.mmBoxBody table{border-collapse:collapse;width:100%;table-layout:fixed}
+.mmBoxBody td,.mmBoxBody th,#mmN2edit td,#mmN2edit th{border:1px solid var(--tbc,#000);padding:4px 6px;min-width:24px;height:1.9em;vertical-align:top;overflow-wrap:anywhere;unicode-bidi:plaintext;text-align:start}
+#mmN2edit table{border-collapse:collapse;margin:6px 0}
+/* ===== جدول: تحديد + شريط أدوات + قائمة كليك يمين ===== */
+.mmN2box.tbl.sel{outline:1.5px solid #3b82f6;outline-offset:2px;box-shadow:0 4px 18px rgba(59,130,246,.16)}
+.mmBoxBody td.tsel,.mmBoxBody th.tsel{background-image:linear-gradient(rgba(59,130,246,.28),rgba(59,130,246,.28))}
+.mmBoxBody td.tcur,.mmBoxBody th.tcur{outline:2px solid #3b82f6;outline-offset:-2px}
+.mmBoxBody.rng{-webkit-user-select:none;user-select:none}
+#mmTblBar{position:fixed;z-index:2150;display:none;max-width:min(96vw,640px);background:rgba(255,255,255,.97);border:1px solid rgba(15,23,42,.1);border-radius:12px;box-shadow:0 8px 24px rgba(15,23,42,.18),0 1px 3px rgba(15,23,42,.1);padding:4px;-webkit-user-select:none;user-select:none;overflow-x:auto;scrollbar-width:none}
+#mmTblBar::-webkit-scrollbar{display:none}
+#mmTblBar .r{display:flex;align-items:center;gap:1px;width:max-content}
+#mmTblBar i.d{width:1px;height:18px;background:rgba(15,23,42,.12);margin:0 4px}
+#mmTblBar button,#mmTblBar label.ci{position:relative;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;min-width:0;padding:0;border:0;border-radius:8px;background:transparent;color:#334155;cursor:pointer;font:inherit}
+#mmTblBar button:hover,#mmTblBar label.ci:hover{background:#eef2ff;color:#1d4ed8}
+#mmTblBar button.dg{color:#dc2626}
+#mmTblBar button.dg:hover{background:#fee2e2;color:#b91c1c}
+#mmTblBar .ci .bar{position:absolute;left:7px;right:7px;bottom:3px;height:3px;border-radius:2px}
+#mmTblBar .ci input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+#mmTblMenu{position:fixed;z-index:2200;display:none;width:252px;max-height:calc(100vh - 12px);overflow:auto;padding:8px;background:rgba(255,255,255,.97);-webkit-backdrop-filter:blur(10px);backdrop-filter:blur(10px);border:1px solid rgba(15,23,42,.08);border-radius:14px;box-shadow:0 18px 40px rgba(15,23,42,.24),0 2px 6px rgba(15,23,42,.1);color:#334155;font-size:12px;-webkit-user-select:none;user-select:none;transform-origin:top right}
+#mmTblMenu.on{animation:mmTpop .13s ease-out}
+@keyframes mmTpop{from{opacity:0;transform:scale(.95) translateY(-4px)}to{opacity:1;transform:none}}
+#mmTblMenu .sec{font-size:10.5px;font-weight:600;color:#94a3b8;margin:6px 4px 4px}
+#mmTblMenu .sec:first-child{margin-top:0}
+#mmTblMenu .g4{display:grid;grid-template-columns:repeat(4,1fr);gap:3px}
+#mmTblMenu button.tt{display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0;padding:7px 2px 5px;border:0;border-radius:9px;background:transparent;color:inherit;font:inherit;font-size:10.5px;line-height:1.15;text-align:center;cursor:pointer}
+#mmTblMenu button.tt:hover{background:#eef2ff;color:#1d4ed8}
+#mmTblMenu button.dg{color:#dc2626}
+#mmTblMenu button.dg:hover{background:#fee2e2;color:#b91c1c}
+#mmTblMenu button.wide{flex-direction:row;justify-content:center;gap:6px;width:100%;padding:8px;font-size:12px;margin-top:3px}
+#mmTblMenu .sep{height:1px;background:rgba(15,23,42,.08);margin:7px 2px}
+#mmTblMenu .sws{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:2px 3px}
+#mmTblMenu .sw{width:20px;height:20px;min-width:0;padding:0;border-radius:50%;border:1px solid rgba(15,23,42,.18);cursor:pointer;transition:transform .1s}
+#mmTblMenu .sw:hover{transform:scale(1.18)}
+#mmTblMenu .sw.no{background:#fff linear-gradient(135deg,transparent 46%,#ef4444 46%,#ef4444 54%,transparent 54%)}
+#mmTblMenu label.cc{position:relative;display:inline-block;width:20px;height:20px;border-radius:50%;border:1px solid rgba(15,23,42,.18);background:conic-gradient(#f43f5e,#f59e0b,#84cc16,#06b6d4,#6366f1,#d946ef,#f43f5e);cursor:pointer;overflow:hidden}
+#mmTblMenu label.cc input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;border:0;padding:0}
+#mmTblMenu .row{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:0 3px}
+#mmTblMenu .seg{display:inline-flex;gap:1px;padding:2px;background:#f1f5f9;border-radius:9px}
+#mmTblMenu button.sg{display:inline-flex;align-items:center;justify-content:center;min-width:28px;height:26px;padding:0 7px;border:0;border-radius:7px;background:transparent;color:inherit;font:inherit;font-size:11px;cursor:pointer}
+#mmTblMenu button.sg:hover{background:#fff;color:#1d4ed8;box-shadow:0 1px 3px rgba(15,23,42,.12)}
 #mmBoxMenu,#mmImgMenu{position:fixed;z-index:2200;display:none;min-width:130px;padding:3px;background:#fff;border:1px solid #c9c5b8;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);font-size:12px;direction:rtl}
 #mmBoxMenu label,#mmBoxMenu button,#mmImgMenu label,#mmImgMenu button{display:flex;align-items:center;justify-content:space-between;gap:8px;width:100%;box-sizing:border-box;margin:0;padding:5px 8px;border:0;background:none;text-align:right;font:inherit;cursor:pointer;border-radius:4px}
 #mmBoxMenu label:hover,#mmBoxMenu button:hover,#mmImgMenu button:hover{background:#f0eee7}
@@ -1572,13 +1622,13 @@ window.undo = undoAll; window.redo = redoAll;
 
     /* ---------- Group: Notes (v2) ---------- */
     function safeNoteHtml(h) { const t = document.createElement('template'); t.innerHTML = h || '';
-      const allow = { B: 1, STRONG: 1, I: 1, EM: 1, U: 1, BR: 1, DIV: 1, P: 1, UL: 1, OL: 1, LI: 1, H1: 1, H2: 1, H3: 1, SPAN: 1, A: 1, IMG: 1, TABLE: 1, THEAD: 1, TBODY: 1, TFOOT: 1, TR: 1, TH: 1, TD: 1, SUB: 1, SUP: 1, FONT: 1 };
+      const allow = { B: 1, STRONG: 1, I: 1, EM: 1, U: 1, BR: 1, DIV: 1, P: 1, UL: 1, OL: 1, LI: 1, H1: 1, H2: 1, H3: 1, SPAN: 1, A: 1, IMG: 1, TABLE: 1, COLGROUP: 1, COL: 1, THEAD: 1, TBODY: 1, TFOOT: 1, TR: 1, TH: 1, TD: 1, SUB: 1, SUP: 1, FONT: 1 };
       const cleanNode = n => [...n.childNodes].forEach(c => { if (c.nodeType === 3) return; if (c.nodeType !== 1) { c.remove(); return; } if (c.tagName === 'SPAN' && c.hasAttribute('data-mmeq') && window.MMEq && window.MMEq.fill(c, c.getAttribute('data-mmeq'))) return; if (!allow[c.tagName]) { cleanNode(c); while (c.firstChild) n.insertBefore(c.firstChild, c); c.remove(); return; }
         [...c.attributes].forEach(a => { const name = a.name.toLowerCase(), v = a.value || '';
-          if (name === 'dir' && /^(rtl|ltr|auto)$/i.test(v)) return; if (name === 'href') { if (!/^(https?:|mailto:|#)/i.test(v)) c.removeAttribute(a.name); return; }
+          if (name === 'dir' && /^(rtl|ltr|auto)$/i.test(v)) return; if ((name === 'colspan' || name === 'rowspan') && /^(TD|TH)$/.test(c.tagName) && /^([1-9]|[1-4]\d|50)$/.test(v)) return; /* دمج الخلايا */ if (name === 'href') { if (!/^(https?:|mailto:|#)/i.test(v)) c.removeAttribute(a.name); return; }
           if (name === 'src') { if (!/^(data:image\/(png|jpeg|jpg|gif|webp);base64,|https?:)/i.test(v)) c.removeAttribute(a.name); return; } if (name === 'alt' || name === 'title') return;
           if (name === 'data-locked') { if (v === '1') return; c.removeAttribute(a.name); return; } /* ADD: Image Lock — نفس بيانات الصورة الحالية، بدون object/State منفصلة */
-          if (name === 'style') { const bad = /url\s*\(|expression|javascript|@import|[<>{}]/i, propOk = /^\s*(color|background-color|font-family|font-size|font-weight|font-style|text-decoration|text-align|direction|line-height|vertical-align|width|height|max-width|position|top|left|float|margin|margin-top|margin-left|margin-right|margin-bottom|display)\s*:/i;
+          if (name === 'style') { const bad = /url\s*\(|expression|javascript|@import|[<>{}]/i, propOk = /^\s*(color|background-color|font-family|font-size|font-weight|font-style|text-decoration|text-align|direction|line-height|vertical-align|border(?:-(?:top|right|bottom|left))?(?:-(?:color|width|style))?|padding|width|height|max-width|position|top|left|float|margin|margin-top|margin-left|margin-right|margin-bottom|display)\s*:/i;
             const ok = v.split(';').filter(x => { if (!propOk.test(x) || bad.test(x)) return false; const pm = /^\s*position\s*:\s*(.+)$/i.exec(x); return !pm || /^(relative|absolute)$/i.test(pm[1].trim()); }).join(';'); ok ? c.setAttribute('style', ok) : c.removeAttribute(a.name); return; } /* ADD: Image Lock — سمحنا بـposition:absolute عشان الصورة المقفولة تفضل Layer ثابت فوق/تحت النص بعد الحفظ */
           c.removeAttribute(a.name); }); if (c.tagName === 'A') c.setAttribute('rel', 'noopener'); cleanNode(c); }); cleanNode(t.content); return t.innerHTML; }
     let note2 = null, note2Id = null, note2Edit = null, note2Wrap = null, note2Layer = null, note2Boxes = null, note2Content = null, selBox = null;
@@ -1610,7 +1660,13 @@ window.undo = undoAll; window.redo = redoAll;
     /* Image Layer: الصور بقت طبقة مستقلة (#mmN2imgs) جنب طبقة النص (#mmN2edit) — بإحداثيات x/y/w/h خاصة بيها، ومش جزء من Text Flow */
     function addLayerImg(o) { const src = safeImgSrc(o && o.src); if (!src) return null; const im = document.createElement('img'); im.dataset.iid = o.id || newUid(); im.setAttribute('src', src); im.setAttribute('alt', o.alt || ''); im.draggable = false;
       im.style.left = (+o.x || 0) + 'px'; im.style.top = (+o.y || 0) + 'px'; im.style.width = (+o.w || 120) + 'px'; im.style.height = (+o.h || 90) + 'px'; if (o.locked) im.dataset.locked = '1'; if (+o.rot) setImgRot(im, +o.rot); if (o.proj && o.pv) { im.__proj = o.proj; im.__pv = o.pv; } note2Layer.appendChild(im); return im; }
-    const serializeLayer = () => [...note2Layer.querySelectorAll(LAYER_SEL)].map(im => isEqEl(im) ? serializeEq(im) : Object.assign({ id: im.dataset.iid, src: safeImgSrc(im.getAttribute('src')), alt: im.getAttribute('alt') || '', x: Math.round(parseFloat(im.style.left) || 0), y: Math.round(parseFloat(im.style.top) || 0), w: Math.round(parseFloat(im.style.width) || im.offsetWidth || 0), h: Math.round(parseFloat(im.style.height) || im.offsetHeight || 0), locked: im.dataset.locked === '1' }, (parseFloat(im.dataset.rot) || 0) ? { rot: Math.round(parseFloat(im.dataset.rot)) } : {}, (im.__proj && im.__pv === window.MM_hash(im.getAttribute('src'))) ? { proj: im.__proj, pv: im.__pv } : {})).filter(o => o.src || o.eq);
+    /* إضافة صورة جديدة للملاحظة — مسار واحد لكل الطرق (زرار الصورة، Ctrl+V، لصق صورة من برّه): نفس المقاس والتحديد. المكان = نص الشاشة الظاهر، أو pos ({x,y} بإحداثيات الملاحظة) لو متحدد. */
+    async function addNoteImage(data, alt, pos) { if (!note2Layer || !note2Id) return null;
+      const im = await imageDims(data), cw = note2Wrap.clientWidth || 600, z = mzZoom || 1, w = Math.min(320, cw * 0.7, im.w || 200), h = w * ((im.h || 150) / Math.max(1, im.w || 200));
+      const el = addLayerImg({ src: data, alt: alt || '', x: pos ? pos.x : Math.max(0, (note2Wrap.scrollLeft + cw / 2) / z - w / 2), y: pos ? pos.y : Math.max(0, (note2Wrap.scrollTop + note2Wrap.clientHeight / 2) / z - h / 2), w, h });
+      if (el) { deselectBox(); selectImage(el); } return el; }
+    const serializeLayerEl = im => isEqEl(im) ? serializeEq(im) : Object.assign({ id: im.dataset.iid, src: safeImgSrc(im.getAttribute('src')), alt: im.getAttribute('alt') || '', x: Math.round(parseFloat(im.style.left) || 0), y: Math.round(parseFloat(im.style.top) || 0), w: Math.round(parseFloat(im.style.width) || im.offsetWidth || 0), h: Math.round(parseFloat(im.style.height) || im.offsetHeight || 0), locked: im.dataset.locked === '1' }, (parseFloat(im.dataset.rot) || 0) ? { rot: Math.round(parseFloat(im.dataset.rot)) } : {}, (im.__proj && im.__pv === window.MM_hash(im.getAttribute('src'))) ? { proj: im.__proj, pv: im.__pv } : {});
+    const serializeLayer = () => [...note2Layer.querySelectorAll(LAYER_SEL)].map(serializeLayerEl).filter(o => o.src || o.eq);
     /* ---------- Floating Chat Box: عنصر مستقل (طبقة #mmN2boxes) — مش Mind Node ومش جزء من Text Flow؛ ممكن يترتبط بصورة بـid ثابت + offset نسبي ---------- */
     const imgRect = im => ({ l: parseFloat(im.style.left) || 0, t: parseFloat(im.style.top) || 0, w: parseFloat(im.style.width) || im.offsetWidth || 0, h: parseFloat(im.style.height) || im.offsetHeight || 0 });
     const boxSize = b => ({ w: parseFloat(b.style.width) || b.offsetWidth || 160, h: parseFloat(b.style.height) || b.offsetHeight || 80 });
@@ -1628,37 +1684,179 @@ window.undo = undoAll; window.redo = redoAll;
     function setBoxTs(b, ts) { ts = Math.max(BOX_TS_MIN, Math.min(BOX_TS_MAX, +ts || 1)); if (Math.abs(ts - 1) < 0.002) { delete b.dataset.ts; b.style.removeProperty('--ts'); } else { b.dataset.ts = ts.toFixed(4); b.style.setProperty('--ts', ts.toFixed(4)); } }
     function updateBoxRz(b) { const rz = b.querySelector('.mmBoxRz'); if (!rz) return; const sz = boxSize(b), hs = Math.round(Math.max(18, Math.min(30, Math.min(sz.w, sz.h) * 0.8))); /* Hit Area كبيرة والـVisual صغير؛ بتصغر بس مع الصناديق الصغيرة جدًا */
       b.style.setProperty('--hs', hs + 'px'); rz.style.width = rz.style.height = hs + 'px'; rz.style.right = rz.style.bottom = Math.round(-hs * 0.3) + 'px'; }
+    function caretIn(el) { const r = document.createRange(), q = getSelection(); r.selectNodeContents(el); r.collapse(false); q.removeAllRanges(); q.addRange(r); }
+    function fitTbl(b) { const t = b.querySelector('.mmBoxBody table'); if (!t) return; b.style.height = Math.max(BOX_MIN_H, Math.ceil(t.offsetHeight * (+b.dataset.ts || 1))) + 'px'; updateBoxRz(b); } /* ارتفاع الصندوق يتبع الصفوف دايمًا */
+    /* ===== Table engine (Grid model: بيدعم دمج/فصل الخلايا rowspan/colspan) ===== */
+    const tG = t => { const g = [], st = new Map(), H = t.rows.length; [...t.rows].forEach((tr, r) => { g[r] = g[r] || []; let c = 0; [...tr.cells].forEach(cell => { while (g[r][c]) c++; const rs = Math.max(1, cell.rowSpan || 1), cs = Math.max(1, cell.colSpan || 1); st.set(cell, [r, c]); for (let i = 0; i < rs && r + i < H; i++) { g[r + i] = g[r + i] || []; for (let j = 0; j < cs; j++) g[r + i][c + j] = cell; } c += cs; }); }); g.length = H; return { g, st, H, W: Math.max(0, ...g.map(x => x.length)) }; };
+    const tNew = (rs, cs, ref) => { const c = document.createElement('td'); if (rs > 1) c.rowSpan = rs; if (cs > 1) c.colSpan = cs; c.innerHTML = '<br>'; if (ref) ['border', 'textAlign', 'verticalAlign'].forEach(k => { if (ref.style[k]) c.style[k] = ref.style[k]; }); return c; };
+    function tInsRow(t, k) { const { g, H, W } = tG(t), n = document.createElement('tr'), seen = new Set(); let prev = null;
+      for (let c = 0; c < W; c++) { const a = k > 0 && g[k - 1] ? g[k - 1][c] : null, b = k < H && g[k] ? g[k][c] : null;
+        if (a && a === b) { if (!seen.has(a)) { seen.add(a); a.rowSpan = (a.rowSpan || 1) + 1; } continue; }
+        const ref = b || a; if (!ref || ref === prev) continue; prev = ref; n.appendChild(tNew(1, ref.colSpan || 1, ref)); }
+      k < H ? t.rows[k].before(n) : t.rows[H - 1].after(n); return n; }
+    function tInsCol(t, k) { const { g, H, W } = tG(t), seen = new Set(); let prev = null;
+      for (let r = 0; r < H; r++) { const a = k > 0 ? g[r][k - 1] : null, b = k < W ? g[r][k] : null;
+        if (a && a === b) { if (!seen.has(a)) { seen.add(a); a.colSpan = (a.colSpan || 1) + 1; } continue; }
+        const ref = a || b; if (!ref || ref === prev) continue; prev = ref; const nc = tNew(ref.rowSpan || 1, 1, ref); a ? a.after(nc) : b.before(nc); } }
+    function tDelRow(t, r) { const { g, st, H, W } = tG(t); if (H < 2) return false; const seen = new Set();
+      for (let c = 0; c < W; c++) { const a = g[r] && g[r][c]; if (!a || seen.has(a)) continue; seen.add(a); const rs = a.rowSpan || 1;
+        if (st.get(a)[0] < r) a.rowSpan = rs - 1;
+        else if (rs > 1) { a.rowSpan = rs - 1; let ref = null; for (let j = c + 1; j < W; j++) { const x = g[r + 1] && g[r + 1][j]; if (x && x !== a && st.get(x)[0] === r + 1) { ref = x; break; } } ref ? ref.before(a) : t.rows[r + 1].appendChild(a); } }
+      t.rows[r].remove(); return true; }
+    function tDelCol(t, c) { const { g, H, W } = tG(t); if (W < 2) return false; const seen = new Set(); for (let r = 0; r < H; r++) { const a = g[r][c]; if (!a || seen.has(a)) continue; seen.add(a); if ((a.colSpan || 1) > 1) a.colSpan = a.colSpan - 1; else a.remove(); } return true; }
+    function tGrow(R) { const { g, st } = R.G; let ch = true; while (ch) { ch = false; for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= R.c2; c++) { const x = g[r] && g[r][c]; if (!x) continue; const p = st.get(x), er = p[0] + (x.rowSpan || 1) - 1, ec = p[1] + (x.colSpan || 1) - 1; if (p[0] < R.r1) { R.r1 = p[0]; ch = true; } if (p[1] < R.c1) { R.c1 = p[1]; ch = true; } if (er > R.r2) { R.r2 = er; ch = true; } if (ec > R.c2) { R.c2 = ec; ch = true; } } } R.r2 = Math.min(R.r2, R.G.H - 1); R.c2 = Math.min(R.c2, R.G.W - 1); return R; }
+    function tCellsIn(R) { const s = new Set(); for (let r = R.r1; r <= R.r2; r++) for (let c = R.c1; c <= R.c2; c++) if (R.G.g[r] && R.G.g[r][c]) s.add(R.G.g[r][c]); return [...s]; }
+    function tMerge(t, R) { tGrow(R); const cs = tCellsIn(R), tl = R.G.g[R.r1][R.c1]; if (cs.length < 2) return null; const emp = x => !x.textContent.trim();
+      cs.forEach(x => { if (x === tl) return; if (!emp(x)) { if (emp(tl)) tl.innerHTML = x.innerHTML; else tl.innerHTML += '<br>' + x.innerHTML; } x.remove(); });
+      tl.rowSpan = R.r2 - R.r1 + 1; tl.colSpan = R.c2 - R.c1 + 1; return tl; }
+    function tSplit(t, cell) { const { g, st, W } = tG(t), p = st.get(cell), rs = cell.rowSpan || 1, cs = cell.colSpan || 1; if (!p || (rs < 2 && cs < 2)) return false; cell.rowSpan = 1; cell.colSpan = 1;
+      for (let r = p[0]; r < p[0] + rs; r++) for (let c = p[1]; c < p[1] + cs; c++) { if (r === p[0] && c === p[1]) continue; let ref = null; for (let j = c + 1; j < W; j++) { const x = g[r] && g[r][j]; if (x && x !== cell && st.get(x)[0] === r) { ref = x; break; } } const nc = tNew(1, 1, cell); ref ? ref.before(nc) : t.rows[r].appendChild(nc); }
+      return true; }
+    function tRect(b) { const t = b.querySelector('.mmBoxBody table'); if (!t || !t.rows.length) return null; const G = tG(t), ok = c => c && c.isConnected && G.st.has(c); let a = ok(b.__cell) ? b.__cell : G.g[0][0], f = a; if (!a) return null;
+      if (b.__sel && ok(b.__sel.a) && ok(b.__sel.f)) { a = b.__sel.a; f = b.__sel.f; } else b.__sel = null;
+      const pa = G.st.get(a), pf = G.st.get(f);
+      return tGrow({ t, G, multi: !!b.__sel, r1: Math.min(pa[0], pf[0]), c1: Math.min(pa[1], pf[1]), r2: Math.max(pa[0] + (a.rowSpan || 1) - 1, pf[0] + (f.rowSpan || 1) - 1), c2: Math.max(pa[1] + (a.colSpan || 1) - 1, pf[1] + (f.colSpan || 1) - 1) }); }
+    function tPaint(b) { const t = b.querySelector('.mmBoxBody table'); if (!t) return; t.querySelectorAll('.tsel,.tcur').forEach(x => x.classList.remove('tsel', 'tcur')); /* تحديد الخلايا = class مؤقت، بيتشال في الحفظ */
+      if (b.__sel) { const R = tRect(b); if (R) tCellsIn(R).forEach(c => c.classList.add('tsel')); } else if (b.__cell && b.__cell.isConnected) b.__cell.classList.add('tcur'); }
+    function tCols(t, W) { let cg = t.querySelector('colgroup'); if (!cg) { cg = document.createElement('colgroup'); t.prepend(cg); } while (cg.children.length < W) cg.appendChild(document.createElement('col')); while (cg.children.length > W) cg.lastChild.remove();
+      const cols = [...cg.children], ws = cols.map(c => parseFloat(c.style.width) || 0), kn = ws.filter(x => x > 0), avg = kn.length ? kn.reduce((p, q) => p + q, 0) / kn.length : 100 / W, v = ws.map(x => x > 0 ? x : avg), tot = v.reduce((p, q) => p + q, 0);
+      cols.forEach((c, i) => { c.style.width = (v[i] / tot * 100).toFixed(2) + '%'; }); return cols; } /* عرض الأعمدة % من الجدول (colgroup) */
+    function tAct(b, a) { const R = tRect(b); if (!R) return; const { t, G } = R, cells = tCellsIn(R), cg0 = () => t.querySelector('colgroup'); let sel = null;
+      if (a === 'ra') tInsRow(t, R.r1); else if (a === 'rb') tInsRow(t, R.r2 + 1);
+      else if (a === 'ca' || a === 'cb') { const k = a === 'ca' ? R.c1 : R.c2 + 1, cg = cg0(); tInsCol(t, k); if (cg) { const col = document.createElement('col'); cg.children[k] ? cg.insertBefore(col, cg.children[k]) : cg.appendChild(col); tCols(t, tG(t).W); } }
+      else if (a === 'rd') { for (let r = R.r2; r >= R.r1; r--) if (!tDelRow(t, r)) break; }
+      else if (a === 'cd') { for (let c = R.c2; c >= R.c1; c--) { if (!tDelCol(t, c)) break; const cg = cg0(); if (cg && cg.children[c]) { cg.children[c].remove(); tCols(t, tG(t).W); } } }
+      else if (a === 'merge') { const m = tMerge(t, R); if (m) b.__cell = m; } else if (a === 'split') tSplit(t, G.g[R.r1][R.c1]);
+      else if (a === 'selrow') sel = [G.g[R.r1][0], G.g[R.r2][G.W - 1]]; else if (a === 'selcol') sel = [G.g[0][R.c1], G.g[G.H - 1][R.c2]]; else if (a === 'selall') sel = [G.g[0][0], G.g[G.H - 1][G.W - 1]];
+      else if (a === 'eq') { const cg = cg0(); if (cg) [...cg.children].forEach(c => { c.style.width = ''; }); tCols(t, G.W); [...t.rows].forEach(r => { r.style.height = ''; }); }
+      else if (a === 'del') { if (selBox === b) selBox = null; hideBoxMenu(); hideTblMenu(); b.remove(); return; }
+      else if (a === 'bold') { const on = cells.every(c => /^(bold|[6-9]00)$/.test(c.style.fontWeight)); cells.forEach(c => { c.style.fontWeight = on ? '' : '700'; }); }
+      else if (a === 'hdr') { const row = tCellsIn({ G, r1: 0, r2: 0, c1: 0, c2: G.W - 1 }), on = row.every(c => /^(bold|[6-9]00)$/.test(c.style.fontWeight)); row.forEach(c => { c.style.fontWeight = on ? '' : '700'; c.style.backgroundColor = on ? '' : '#e8eefc'; c.style.textAlign = on ? '' : 'center'; }); }
+      else if (a === 'nobg') cells.forEach(c => { c.style.backgroundColor = ''; });
+      else if (/^bw\d$/.test(a)) { tBd.w = +a.slice(2); tBorder(b); }
+      else if (/^al-/.test(a)) cells.forEach(c => { c.style.textAlign = a.slice(3); }); else if (/^va-/.test(a)) cells.forEach(c => { c.style.verticalAlign = a.slice(3); });
+      if (sel && sel[0] && sel[1]) b.__sel = { a: sel[0], f: sel[1] }; else if (/^(ra|rb|ca|cb|rd|cd|merge|split)$/.test(a)) b.__sel = null;
+      tPaint(b); fitTbl(b); }
+    function tblOp(b, cell, a) { const R = b.__sel && tRect(b); if (cell && !(R && tCellsIn(R).includes(cell))) { b.__cell = cell; b.__sel = null; } tAct(b, a); } /* قائمة كليك يمين: لو الخلية جوه التحديد الحالي بيفضل التحديد */
+    function tColor(b, k, v) { const R = tRect(b); if (!R) return; tCellsIn(R).forEach(c => { if (k === 'bg') c.style.backgroundColor = v; else c.style.color = v; }); tPaint(b); fitTbl(b); }
+    let tBd = { w: 1, c: '#000000' };
+    function tBorder(b) { const R = tRect(b); if (!R) return; const cs = R.multi ? tCellsIn(R) : [...R.t.querySelectorAll('td,th')]; /* من غير تحديد = كل الجدول */
+      cs.forEach(c => { c.style.border = tBd.w === 0 ? 'none' : tBd.w + 'px solid ' + tBd.c; }); fitTbl(b); }
+    function tEdge(b, e) { const c = e.target.closest && e.target.closest('td,th'); if (!c || !b.contains(c)) return null; const r = c.getBoundingClientRect(), near = e.pointerType === 'mouse' ? 5 : 12, dR = Math.abs(e.clientX - r.right), dL = Math.abs(e.clientX - r.left), dB = Math.abs(e.clientY - r.bottom); if (dR > near && dL > near && dB > near) return null;
+      const t = c.closest('table'), G = tG(t), p = G.st.get(c), c1 = p[1] + (c.colSpan || 1), r1 = p[0] + (c.rowSpan || 1) - 1; if (dR <= near && c1 < G.W) return { k: 'col', i: c1 - 1, t, G }; if (dL <= near && p[1] > 0) return { k: 'col', i: p[1] - 1, t, G }; if (dB <= near && r1 < G.H - 1) return { k: 'row', i: r1, t, G }; return null; } /* حدود داخلية بس */
+    function tStartResize(b, g, e) { const { t, G } = g, sc = (+b.dataset.ts || 1) * (mzZoom || 1), x0 = e.clientX, y0 = e.clientY; let cols = null, w0 = null, h0 = 0;
+      if (g.k === 'col') { cols = tCols(t, G.W); w0 = cols.map(c => parseFloat(c.style.width) || 0); } else h0 = t.rows[g.i].offsetHeight;
+      const mv = ev => { ev.preventDefault(); if (g.k === 'col') { const d = Math.max(-(w0[g.i] - 4), Math.min(w0[g.i + 1] - 4, (ev.clientX - x0) / Math.max(1, t.offsetWidth * sc) * 100)); cols[g.i].style.width = (w0[g.i] + d).toFixed(2) + '%'; cols[g.i + 1].style.width = (w0[g.i + 1] - d).toFixed(2) + '%'; } else t.rows[g.i].style.height = Math.max(18, h0 + (ev.clientY - y0) / sc) + 'px'; fitTbl(b); };
+      const up = () => { ['pointermove', 'pointerup', 'pointercancel'].forEach(n => document.removeEventListener(n, n === 'pointermove' ? mv : up, true)); };
+      document.addEventListener('pointermove', mv, true); document.addEventListener('pointerup', up, true); document.addEventListener('pointercancel', up, true); } /* سحب حدود العمود/الصف */
+    /* ----- تفاعل الجدول: السحب والتكبير من الجدول نفسه (من غير مقابض) -----
+       الأولوية: ركن = تكبير | حد داخلي = عرض عمود/ارتفاع صف | الإطار الخارجي = تحريك | جسم الجدول = تحريك (لو مش بتكتب فيه) | غير كده = كتابة وتحديد خلايا */
+    const tblEditing = b => { const s = getSelection(), n = s && s.anchorNode; return !!(n && b.classList.contains('sel') && b.querySelector('.mmBoxBody').contains(n)); };
+    function tblZone(b, e) { const r = b.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top, W = r.width, H = r.height, tc = e.pointerType !== 'mouse', zs = Math.min(tc ? 26 : 14, W / 3, H / 3), pb = tc ? 12 : 7;
+      if ((x <= zs || x >= W - zs) && (y <= zs || y >= H - zs)) return { k: 'rz', sx: x >= W - zs ? 1 : -1, sy: y >= H - zs ? 1 : -1 };
+      const g = tEdge(b, e); if (g) return g;
+      if (x <= pb || x >= W - pb || y <= pb || y >= H - pb) return { k: 'move' };
+      return { k: tblEditing(b) ? 'edit' : 'move' }; }
+    function tblEnterEdit(b, x, y) { const body = b.querySelector('.mmBoxBody'); body.focus({ preventScroll: true }); let r = null;
+      if (document.caretRangeFromPoint) r = document.caretRangeFromPoint(x, y); else if (document.caretPositionFromPoint) { const p = document.caretPositionFromPoint(x, y); if (p) { r = document.createRange(); r.setStart(p.offsetNode, p.offset); r.collapse(true); } }
+      const el = r && (r.startContainer.nodeType === 1 ? r.startContainer : r.startContainer.parentElement), c = el && el.closest && el.closest('td,th');
+      if (r && c && body.contains(c)) { const s = getSelection(); s.removeAllRanges(); s.addRange(r); b.__cell = c; } else if (b.__cell && b.__cell.isConnected) caretIn(b.__cell); b.__sel = null; tPaint(b); } /* كليك من غير سحب = كتابة في الخلية */
+    function tblWire(b, body) { let dr = null; b.__noEdit = false;
+      ['mousedown', 'selectstart', 'dragstart'].forEach(n => body.addEventListener(n, e => { if (b.__noEdit) e.preventDefault(); }));
+      body.addEventListener('pointermove', e => { if (dr) { if (e.pointerType === 'mouse' && !(e.buttons & 1)) { dr = null; return; } const el = document.elementFromPoint(e.clientX, e.clientY), c = el && el.closest ? el.closest('td,th') : null;
+          if (c && b.contains(c) && c !== dr.c) { b.__sel = { a: dr.c, f: c }; body.classList.add('rng'); getSelection().removeAllRanges(); tPaint(b); e.preventDefault(); } return; } /* سحب من خلية لخلية (وقت الكتابة) = تحديد نطاق */
+        if (e.pointerType === 'mouse' && !e.buttons) { const z = tblZone(b, e); body.style.cursor = z.k === 'rz' ? (z.sx * z.sy > 0 ? 'nwse-resize' : 'nesw-resize') : z.k === 'col' ? 'col-resize' : z.k === 'row' ? 'row-resize' : (z.k === 'move' && !b.dataset.img) ? 'move' : ''; } });
+      body.addEventListener('pointerdown', e => { b.__noEdit = false; if (e.pointerType === 'mouse' && e.button !== 0) return; const z = tblZone(b, e);
+        if (z.k === 'col' || z.k === 'row') { e.preventDefault(); e.stopPropagation(); b.__noEdit = true; tStartResize(b, z, e); return; }
+        if (z.k !== 'edit') { b.__noEdit = true; return; } /* تحريك/تكبير: الـBox هو اللي بيتولاهم */
+        const c = e.target.closest && e.target.closest('td,th'); if (!c) return;
+        if (e.shiftKey && b.__cell) { e.preventDefault(); b.__sel = { a: b.__cell, f: c }; tPaint(b); return; }
+        b.__cell = c; b.__sel = null; body.classList.remove('rng'); tPaint(b); dr = { c }; });
+      const up = () => { dr = null; b.__noEdit = false; body.classList.remove('rng'); }; body.addEventListener('pointerup', up); body.addEventListener('pointercancel', up); }
+    /* ----- الأيقونات (SVG بسيطة بخط واحد) ----- */
+    const TI = { ra: '<rect x="3" y="13" width="18" height="7" rx="1.5"/><path d="M12 3v7M8.5 6.5h7"/>', rb: '<rect x="3" y="4" width="18" height="7" rx="1.5"/><path d="M12 14v7M8.5 17.5h7"/>', ca: '<rect x="13" y="3" width="7" height="18" rx="1.5"/><path d="M3 12h7M6.5 8.5v7"/>', cb: '<rect x="4" y="3" width="7" height="18" rx="1.5"/><path d="M14 12h7M17.5 8.5v7"/>',
+      rd: '<rect x="3" y="7" width="18" height="10" rx="1.5"/><path d="M10 10.5l4 3M14 10.5l-4 3"/>', cd: '<rect x="7" y="3" width="10" height="18" rx="1.5"/><path d="M10 10l4 4M14 10l-4 4"/>', merge: '<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M7.5 12h9M7.5 12l2.2-2.2M7.5 12l2.2 2.2M16.5 12l-2.2-2.2M16.5 12l-2.2 2.2"/>', split: '<rect x="3" y="5" width="18" height="14" rx="1.5"/><path d="M12 5v14M5.5 12h4M18.5 12h-4"/>',
+      selrow: '<rect x="3" y="9" width="18" height="6" rx="1" stroke-dasharray="2.4 2"/><path d="M3 4.5h18M3 19.5h18" opacity=".4"/>', selcol: '<rect x="9" y="3" width="6" height="18" rx="1" stroke-dasharray="2.4 2"/><path d="M4.5 3v18M19.5 3v18" opacity=".4"/>', selall: '<rect x="3" y="3" width="18" height="18" rx="2" stroke-dasharray="2.6 2.2"/><path d="M3 12h18M12 3v18" opacity=".45"/>', eq: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M9 4v16M15 4v16"/>',
+      del: '<path d="M4 7h16M9.5 7V4.5h5V7M6.5 7l1 13h9l1-13M10 11v6M14 11v6"/>', fill: '<path d="M6 12.5l6.5-6.5 5.5 5.5-6.5 6.5z"/><path d="M19.5 14.5s1.8 2 1.8 3.2a1.8 1.8 0 01-3.6 0c0-1.2 1.8-3.2 1.8-3.2z"/>', fg: '<path d="M7 17l5-11 5 11M9 13h6"/>', border: '<rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M4 12h16M12 4v16" opacity=".5"/>',
+      alL: '<path d="M4 6h16M4 10h10M4 14h16M4 18h10"/>', alC: '<path d="M4 6h16M7 10h10M4 14h16M7 18h10"/>', alR: '<path d="M4 6h16M10 10h10M4 14h16M10 18h10"/>', vaT: '<path d="M4 4h16M12 20V9M8 12.5l4-4 4 4"/>', vaM: '<path d="M4 12h16M12 3v6M9 6l3 3 3-3M12 21v-6M9 18l3-3 3 3"/>', vaB: '<path d="M4 20h16M12 4v11M8 11.5l4 4 4-4"/>',
+      bold: '<path d="M7 5h6a3.5 3.5 0 010 7H7zM7 12h7a3.5 3.5 0 010 7H7z"/>', hdr: '<rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 9.5h18" stroke-width="3.2"/>', more: '<circle cx="5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="19" cy="12" r="1.2"/>' };
+    const ico = (k, s) => '<svg viewBox="0 0 24 24" width="' + s + '" height="' + s + '" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">' + TI[k] + '</svg>';
+    const LB = { ra: 'صف فوق', rb: 'صف تحت', ca: 'عمود يسار', cb: 'عمود يمين', rd: 'حذف صف', cd: 'حذف عمود', merge: 'دمج', split: 'فصل', selrow: 'تحديد الصف', selcol: 'تحديد العمود', selall: 'تحديد الكل', eq: 'تساوي الأعمدة', del: 'حذف الجدول', 'al-left': 'يسار', 'al-center': 'وسط', 'al-right': 'يمين', 'va-top': 'أعلى', 'va-middle': 'منتصف', 'va-bottom': 'أسفل', bold: 'عريض', hdr: 'صف عنوان', more: 'كل الخيارات' };
+    const AI = { 'al-left': 'alL', 'al-center': 'alC', 'al-right': 'alR', 'va-top': 'vaT', 'va-middle': 'vaM', 'va-bottom': 'vaB' };
+    /* ----- شريط الأدوات العائم (سطر واحد بالأيقونات) ----- */
+    let tbar = null, tbarOn = false;
+    function ensureTbar() { if (tbar) return tbar; tbar = document.createElement('div'); tbar.id = 'mmTblBar'; tbar.dir = 'ltr';
+      const B = (a, cl) => '<button type="button" data-a="' + a + '" title="' + LB[a] + '"' + (cl ? ' class="' + cl + '"' : '') + '>' + ico(AI[a] || a, 17) + '</button>', D = '<i class="d"></i>', C = (k, ic, tip, v) => '<label class="ci" title="' + tip + '">' + ico(ic, 17) + '<i class="bar" style="background:' + v + '"></i><input type="color" data-k="' + k + '" value="' + v + '"></label>';
+      tbar.innerHTML = '<div class="r">' + B('ra') + B('rb') + B('ca') + B('cb') + D + B('rd', 'dg') + B('cd', 'dg') + D + B('merge') + B('split') + D + C('bg', 'fill', 'لون الخلفية', '#fff2a8') + C('fg', 'fg', 'لون الخط', '#c00000') + C('bc', 'border', 'لون الحدود', '#000000') + D + B('al-left') + B('al-center') + B('al-right') + D + B('bold') + B('hdr') + D + B('more') + B('del', 'dg') + '</div>';
+      document.body.appendChild(tbar);
+      tbar.addEventListener('mousedown', e => { if (!/^(INPUT)$/.test(e.target.tagName)) e.preventDefault(); }); /* الزرار ما يسحبش الكيرسور من الخلية */
+      tbar.addEventListener('click', e => { const bt = e.target.closest && e.target.closest('button[data-a]'); if (!bt || !selBox) return; if (bt.dataset.a === 'more') { const r = bt.getBoundingClientRect(); openTblMenu(selBox, r.left, r.bottom + 6, true); } else tAct(selBox, bt.dataset.a); });
+      tbar.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.k; if (!k || !selBox) return; const bar = e.target.parentElement.querySelector('.bar'); if (bar) bar.style.background = e.target.value; if (k === 'bc') { tBd.c = e.target.value; tBorder(selBox); } else tColor(selBox, k, e.target.value); });
+      return tbar; }
+    function tbarTick() { const b = selBox, ok = b && b.isConnected && b.classList.contains('tbl') && note2 && note2.classList.contains('show'); if (!ok) { if (tbar) tbar.style.display = 'none'; tbarOn = false; return; }
+      ensureTbar(); tbar.style.display = 'block'; const r = b.getBoundingClientRect(), w = tbar.offsetWidth, h = tbar.offsetHeight, vw = window.innerWidth || 800, vh = window.innerHeight || 600; let y = r.top - h - 10; if (y < 4) y = Math.min(vh - h - 4, r.bottom + 10);
+      tbar.style.left = Math.max(4, Math.min(r.left, vw - w - 4)) + 'px'; tbar.style.top = Math.max(4, y) + 'px'; requestAnimationFrame(tbarTick); }
+    function tbarSync() { if (!tbarOn && selBox && selBox.classList.contains('tbl')) { tbarOn = true; tbarTick(); } }
+    /* ----- قائمة كليك يمين / الضغطة المطوّلة ----- */
+    let tmenu = null, tmenuB = null;
+    function hideTblMenu() { if (tmenu) tmenu.style.display = 'none'; tmenuB = null; }
+    function ensureTblMenu() { if (tmenu) return tmenu; tmenu = document.createElement('div'); tmenu.id = 'mmTblMenu'; tmenu.dir = 'rtl';
+      const T = (a, cl) => '<button type="button" class="tt' + (cl ? ' ' + cl : '') + '" data-a="' + a + '">' + ico(a, 20) + '<span>' + LB[a] + '</span></button>', S = a => '<button type="button" class="sg" data-a="' + a + '" title="' + LB[a] + '">' + ico(AI[a] || a, 16) + '</button>', P = (a, t) => '<button type="button" class="sg" data-a="' + a + '">' + t + '</button>';
+      const sw = ['#fff2a8', '#ffd9d9', '#ffe3c2', '#d7f5d7', '#d4e8ff', '#e7ddff', '#e5e7eb', '#1f2937'].map(c => '<button type="button" class="sw" data-bg="' + c + '" style="background:' + c + '"></button>').join('');
+      tmenu.innerHTML = '<div class="sec">إدراج</div><div class="g4">' + T('ra') + T('rb') + T('ca') + T('cb') + '</div>' +
+        '<div class="sec">خلايا</div><div class="g4">' + T('rd', 'dg') + T('cd', 'dg') + T('merge') + T('split') + '</div><div class="sep"></div>' +
+        '<div class="sec">تعبئة الخلية</div><div class="sws"><button type="button" class="sw no" data-a="nobg" title="بدون خلفية"></button>' + sw + '<label class="cc" title="لون مخصّص"><input type="color" data-k="bg" value="#ffff00"></label></div>' +
+        '<div class="sec">النص</div><div class="row"><div class="seg">' + S('al-left') + S('al-center') + S('al-right') + '</div><div class="seg">' + S('va-top') + S('va-middle') + S('va-bottom') + '</div><div class="seg">' + S('bold') + S('hdr') + '</div></div>' +
+        '<div class="sec">الحدود</div><div class="row"><div class="seg">' + P('bw0', 'بدون') + P('bw1', 'رفيع') + P('bw2', 'وسط') + P('bw3', 'سميك') + '</div><label class="cc" title="لون الحدود"><input type="color" data-k="bc" value="#000000"></label></div><div class="sep"></div>' +
+        '<div class="g4">' + T('selrow') + T('selcol') + T('selall') + T('eq') + '</div><button type="button" class="tt dg wide" data-a="del">' + ico('del', 17) + '<span>حذف الجدول</span></button>';
+      document.body.appendChild(tmenu);
+      tmenu.addEventListener('mousedown', e => { if (e.target.tagName !== 'INPUT') e.preventDefault(); });
+      tmenu.addEventListener('click', e => { const bt = e.target.closest && e.target.closest('button'), b = tmenuB; if (!bt || !b) return; if (bt.dataset.bg) tColor(b, 'bg', bt.dataset.bg); else if (bt.dataset.a) tAct(b, bt.dataset.a); hideTblMenu(); });
+      tmenu.addEventListener('input', e => { const k = e.target.dataset && e.target.dataset.k, b = tmenuB; if (!k || !b) return; if (k === 'bc') { tBd.c = e.target.value; tBorder(b); } else tColor(b, 'bg', e.target.value); });
+      document.addEventListener('pointerdown', e => { if (tmenu.style.display === 'block' && !tmenu.contains(e.target)) hideTblMenu(); }, true);
+      document.addEventListener('keydown', e => { if (e.key === 'Escape') hideTblMenu(); }, true); return tmenu; }
+    function openTblMenu(b, x, y, keep) { ensureTblMenu(); tmenuB = b;
+      if (!keep) { const el = document.elementFromPoint(x, y), c = el && el.closest ? el.closest('td,th') : null, R = b.__sel && tRect(b); if (c && b.contains(c) && !(R && tCellsIn(R).includes(c))) { b.__cell = c; b.__sel = null; tPaint(b); } } /* الخلية اللي تحت الماوس/الإصبع */
+      tmenu.style.display = 'block'; tmenu.classList.remove('on'); void tmenu.offsetWidth; tmenu.classList.add('on'); const w = tmenu.offsetWidth, h = tmenu.offsetHeight, vw = window.innerWidth || 800, vh = window.innerHeight || 600;
+      tmenu.style.left = Math.max(6, Math.min(x, vw - w - 6)) + 'px'; tmenu.style.top = Math.max(6, Math.min(y, vh - h - 6)) + 'px'; }
+    document.addEventListener('selectionchange', () => { const s = getSelection(), n = s && s.anchorNode; if (!n || !selBox || !selBox.classList.contains('tbl')) return; const el = n.nodeType === 1 ? n : n.parentElement, c = el && el.closest && el.closest('td,th'); if (c && selBox.contains(c) && selBox.__cell !== c && !selBox.__sel) { selBox.__cell = c; tPaint(selBox); } });
     function resizeBox(b, w, h, base) { w = Math.max(BOX_MIN_W, w); h = Math.max(BOX_MIN_H, h); b.style.width = w + 'px'; b.style.height = h + 'px'; /* Box Size ↔ Text Size: scale = min(scaleX, scaleY) من حجم بداية الـgesture */
+      if (b.classList.contains('tbl')) { setBoxTs(b, base.ts0 * w / base.w0); fitTbl(b); return; } /* جدول: تكبير بالعرض بنسبة ثابتة زي الصورة */
       setBoxTs(b, base.ts0 * Math.min(w / base.w0, h / base.h0)); updateBoxRz(b); }
     const okHex = c => /^#[0-9a-f]{6}$/i.test(c || ''), okBg = c => c === 'transparent' || okHex(c);
     function setBoxStyle(b, st) { /* الخلفية والبرواز منفصلين؛ الـSelection بيتعمل بـoutline فمش بيغيّر البرواز الحقيقي */
       if (st.bg !== undefined) b.dataset.bg = okBg(st.bg) ? st.bg : 'transparent'; if (st.bc !== undefined) b.dataset.bc = okHex(st.bc) ? st.bc : '#000000'; if (st.bo !== undefined) b.dataset.bo = st.bo ? '1' : '0';
-      const bg = b.dataset.bg || 'transparent', bc = b.dataset.bc || '#000000', bo = b.dataset.bo !== '0'; b.style.background = bg; b.style.border = bo ? '1px solid ' + bc : 'none';
+      const bg = b.dataset.bg || 'transparent', bc = b.dataset.bc || '#000000', bo = b.dataset.bo !== '0'; b.style.background = bg; b.style.border = bo ? '1px solid ' + bc : 'none'; b.style.setProperty('--tbc', bc);
       let fg = '#000'; if (bg !== 'transparent') { const n = parseInt(bg.slice(1), 16), lum = 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255); fg = lum < 140 ? '#fff' : '#000'; } b.style.color = fg; }
     /* قائمة الـText Box — نفس القائمة للـLong Press (هاتف) والـRight Click (كمبيوتر) */
-    let boxMenu = null, boxMenuTarget = null;
+    let boxMenu = null, boxMenuTarget = null, boxMenuCell = null;
     function ensureBoxMenu() { if (boxMenu) return boxMenu; boxMenu = document.createElement('div'); boxMenu.id = 'mmBoxMenu';
       boxMenu.innerHTML = '<button data-a="del">حذف</button><button data-a="pin">📌 تثبيت بالصورة (Pin)</button><button data-a="unpin">📍 إلغاء التثبيت (Unpin)</button><label>لون البرواز<input type="color" data-c="bc" value="#000000"></label><button data-a="noborder">بدون برواز</button><label>لون الخلفية<input type="color" data-c="bg" value="#ffff00"></label><button data-a="nofill">بدون خلفية</button>'; document.body.appendChild(boxMenu);
       boxMenu.querySelectorAll('input[data-c]').forEach(inp => inp.addEventListener('input', () => { if (!boxMenuTarget) return; if (inp.dataset.c === 'bc') setBoxStyle(boxMenuTarget, { bc: inp.value, bo: true }); else setBoxStyle(boxMenuTarget, { bg: inp.value }); }));
       boxMenu.querySelectorAll('button[data-a]').forEach(btn => btn.addEventListener('click', () => { const b = boxMenuTarget, a = btn.dataset.a; if (!b) return;
-        if (a === 'del') { if (selBox === b) selBox = null; b.remove(); } else if (a === 'unpin') detachBox(b); else if (a === 'pin') { const im = imageUnderBox(b); if (im) pinBox(b, im); } else if (a === 'noborder') setBoxStyle(b, { bo: false }); else if (a === 'nofill') setBoxStyle(b, { bg: 'transparent' }); hideBoxMenu(); }));
+        if (a === 'del') { if (selBox === b) selBox = null; b.remove(); } else if (a === 'unpin') detachBox(b); else if (a === 'pin') { const im = imageUnderBox(b); if (im) pinBox(b, im); } else if (/^(ra|rb|ca|cb|rd|cd)$/.test(a)) tblOp(b, boxMenuCell, a); else if (a === 'noborder') setBoxStyle(b, { bo: false }); else if (a === 'nofill') setBoxStyle(b, { bg: 'transparent' }); hideBoxMenu(); }));
       document.addEventListener('pointerdown', e => { if (boxMenu.style.display === 'block' && !boxMenu.contains(e.target)) hideBoxMenu(); }, true);
       document.addEventListener('keydown', e => { if (e.key === 'Escape') hideBoxMenu(); }, true); return boxMenu; }
     function hideBoxMenu() { if (boxMenu) boxMenu.style.display = 'none'; boxMenuTarget = null; }
-    function openBoxMenu(b, x, y) { ensureBoxMenu(); boxMenuTarget = b; selectBox(b);
+    function openBoxMenu(b, x, y) { if (b.classList.contains('tbl')) { hideBoxMenu(); selectBox(b); openTblMenu(b, x, y); return; } ensureBoxMenu(); boxMenuTarget = b; selectBox(b);
+      const isT = b.classList.contains('tbl'), el0 = isT ? document.elementFromPoint(x, y) : null; boxMenuCell = el0 && el0.closest ? el0.closest('td,th') : null; /* الخلية اللي تحت الإصبع/الماوس */
+      boxMenu.querySelectorAll('.tb').forEach(q => { q.style.display = isT ? '' : 'none'; q.disabled = !boxMenuCell; });
       boxMenu.querySelector('[data-a="unpin"]').style.display = b.dataset.img ? '' : 'none'; /* بس لو مرتبطة بصورة */
       boxMenu.querySelector('[data-a="pin"]').style.display = (!b.dataset.img && imageUnderBox(b)) ? '' : 'none'; /* Pin صريح: بس لو الـBox مش مرتبطة وفيه صورة تحتها */
       boxMenu.querySelector('[data-c="bc"]').value = b.dataset.bc || '#000000'; boxMenu.querySelector('[data-c="bg"]').value = b.dataset.bg && b.dataset.bg !== 'transparent' ? b.dataset.bg : '#ffff00';
       boxMenu.style.display = 'block'; const w = boxMenu.offsetWidth || 140, h = boxMenu.offsetHeight || 150, vw = window.innerWidth || 800, vh = window.innerHeight || 600;
       boxMenu.style.left = Math.max(4, Math.min(x, vw - w - 4)) + 'px'; boxMenu.style.top = Math.max(4, Math.min(y, vh - h - 4)) + 'px'; }
-    function selectBox(b) { if (selBox && selBox !== b) selBox.classList.remove('sel'); selBox = b; b.classList.add('sel'); }
+    function selectBox(b) { if (selBox && selBox !== b) selBox.classList.remove('sel'); selBox = b; b.classList.add('sel'); tbarSync(); }
     function deselectBox() { if (selBox) selBox.classList.remove('sel'); selBox = null; }
     function addBox(o) { const b = document.createElement('div'); b.className = 'mmN2box'; b.dataset.bid = o.id || newUid();
       b.style.left = (+o.x || 0) + 'px'; b.style.top = (+o.y || 0) + 'px'; b.style.width = (+o.w || 200) + 'px'; b.style.height = (+o.h || 90) + 'px';
       b.innerHTML = '<div class="mmBoxBody" contenteditable="true"></div><i class="mmBoxRz" contenteditable="false"></i>'; if (+o.ts) setBoxTs(b, +o.ts); const body = b.querySelector('.mmBoxBody'); body.innerHTML = safeNoteHtml(o.html || '');
+      if (o.tbl) { b.classList.add('tbl'); const rz0 = b.querySelector('.mmBoxRz'); if (rz0) rz0.remove(); b.__cell = body.querySelector('td,th'); tblWire(b, body); }
       const legacy = o.bo === undefined; setBoxStyle(b, { bg: legacy && o.bg === '#000000' ? 'transparent' : (o.bg || 'transparent'), bc: o.bc || '#000000', bo: legacy ? true : !!o.bo }); /* الشكل الافتراضي: إطار أسود + خلفية شفافة */
       const im = imgById(o.img); if (im) { const r = imgRect(im); b.dataset.img = o.img; b.dataset.rx = +o.rx || 0; b.dataset.ry = +o.ry || 0; b.style.left = (r.l + (+o.rx || 0)) + 'px'; b.style.top = (r.t + (+o.ry || 0)) + 'px'; }
-      body.addEventListener('keydown', e => e.stopPropagation()); body.addEventListener('keyup', e => e.stopPropagation()); /* Keyboard يفضل جوه الـBox */
+      body.addEventListener('keydown', e => { e.stopPropagation(); if (!b.classList.contains('tbl')) return; if ((e.key === 'Delete' || e.key === 'Backspace') && b.__sel) { e.preventDefault(); const R = tRect(b); if (R) tCellsIn(R).forEach(x => { x.innerHTML = '<br>'; }); fitTbl(b); return; } if (e.key === 'Escape') { e.preventDefault(); getSelection().removeAllRanges(); body.blur(); b.__sel = null; tPaint(b); return; } /* Esc = خروج من الكتابة، وبعدها تسحب الجدول من أي مكان */ if (e.key !== 'Tab') return; const sn = getSelection().anchorNode, c = sn && (sn.nodeType === 1 ? sn : sn.parentElement).closest('td,th'); if (!c) return; e.preventDefault();
+        let cs = [...b.querySelectorAll('td,th')], i = cs.indexOf(c) + (e.shiftKey ? -1 : 1); if (i >= cs.length) { tblOp(b, c, 'rb'); cs = [...b.querySelectorAll('td,th')]; } if (cs[Math.max(0, i)]) caretIn(cs[Math.max(0, i)]); }); /* Tab = الخلية اللي بعدها (وفي آخر خلية بيضيف صف) */
+      body.addEventListener('keyup', e => e.stopPropagation()); body.addEventListener('input', () => { if (b.classList.contains('tbl')) fitTbl(b); }); /* Keyboard يفضل جوه الـBox */
       b.addEventListener('contextmenu', e => { e.preventDefault(); openBoxMenu(b, e.clientX, e.clientY); }); /* Right Click على الـBox بس */
       updateBoxRz(b); const pts = new Map(); let lp = null, drag = null, pinch = null, rs = null; const lpStop = () => { if (lp) { clearTimeout(lp.t); lp = null; } };
       b.addEventListener('pointerdown', e => {
@@ -1669,16 +1867,22 @@ window.undo = undoAll; window.redo = redoAll;
         pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (pts.size >= 2) { lpStop(); drag = null; const ids = [...pts.keys()], p1 = pts.get(ids[0]), p2 = pts.get(ids[1]), sz = boxSize(b); pinch = { d0: Math.max(1, Math.hypot(p2.x - p1.x, p2.y - p1.y)), w0: sz.w, h0: sz.h, ts0: +b.dataset.ts || 1 }; e.preventDefault(); return; } /* Pinch: بيبدأ من الحجم الفعلي، من غير قفزة */
         if (e.pointerType !== 'mouse') { lpStop(); const x0 = e.clientX, y0 = e.clientY; lp = { x0, y0, t: setTimeout(() => { lp = null; drag = null; openBoxMenu(b, x0, y0); }, 550) }; } /* Long Press: pointerdown + حركة صغيرة + زمن */
+        if (b.classList.contains('tbl')) { if (e.pointerType === 'mouse' && e.button !== 0) return; const z = tblZone(b, e);
+          if (z.k === 'rz') { e.preventDefault(); e.stopPropagation(); lpStop(); drag = null; pinch = null; hideBoxMenu(); hideTblMenu(); const sz = boxSize(b); rs = { id: e.pointerId, x0: e.clientX, y0: e.clientY, w0: sz.w, h0: sz.h, ts0: +b.dataset.ts || 1, sx: z.sx, sy: z.sy, l0: parseFloat(b.style.left) || 0, t0: parseFloat(b.style.top) || 0 }; selectBox(b); try { b.setPointerCapture(e.pointerId); } catch (err) { } return; }
+          if (z.k === 'move' && !b.dataset.img) { e.preventDefault(); selectBox(b); drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, l: parseFloat(b.style.left) || 0, t: parseFloat(b.style.top) || 0, moved: false, tap: true }; try { b.setPointerCapture(e.pointerId); } catch (err) { } }
+          return; } /* جدول: ركن = تكبير، جسم/إطار = تحريك، كليك من غير سحب = كتابة */
         if (e.target === b && e.button === 0 && !b.dataset.img) { e.preventDefault(); drag = { id: e.pointerId, x0: e.clientX, y0: e.clientY, l: parseFloat(b.style.left) || 0, t: parseFloat(b.style.top) || 0, moved: false }; try { b.setPointerCapture(e.pointerId); } catch (err) { } } }); /* سحب من الإطار؛ المرتبطة ما بتتسحبش مستقلة */
-      b.addEventListener('pointermove', e => { if (rs) { if (e.pointerId === rs.id) { e.preventDefault(); const z = mzZoom || 1; resizeBox(b, rs.w0 + (e.clientX - rs.x0) / z, rs.h0 + (e.clientY - rs.y0) / z, rs); } return; } /* Resize لحظي: click+drag مباشرة */
+      b.addEventListener('pointermove', e => { if (rs) { if (e.pointerId === rs.id) { e.preventDefault(); const z = mzZoom || 1;
+            if (rs.sx) { const rx = rs.sx * (e.clientX - rs.x0) / z / rs.w0, ry = rs.sy * (e.clientY - rs.y0) / z / rs.h0, k = Math.abs(rx) > Math.abs(ry) ? rx : ry; resizeBox(b, rs.w0 * (1 + k), 0, rs); const sz = boxSize(b); if (rs.sx < 0) b.style.left = Math.max(0, rs.l0 + rs.w0 - sz.w) + 'px'; if (rs.sy < 0) b.style.top = Math.max(0, rs.t0 + rs.h0 - sz.h) + 'px'; } /* تكبير الجدول من أي ركن بنسبة ثابتة */
+            else resizeBox(b, rs.w0 + (e.clientX - rs.x0) / z, rs.h0 + (e.clientY - rs.y0) / z, rs); } return; } /* Resize لحظي: click+drag مباشرة */
         if (pts.has(e.pointerId)) pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (lp && Math.hypot(e.clientX - lp.x0, e.clientY - lp.y0) > 8) lpStop();
         if (pinch && pts.size >= 2) { e.preventDefault(); const ids = [...pts.keys()], p1 = pts.get(ids[0]), p2 = pts.get(ids[1]), sc = Math.hypot(p2.x - p1.x, p2.y - p1.y) / pinch.d0; resizeBox(b, pinch.w0 * sc, pinch.h0 * sc, pinch); return; } /* Pinch = Box + Text Scale */
         if (drag && e.pointerId === drag.id) { if (Math.abs(e.clientX - drag.x0) + Math.abs(e.clientY - drag.y0) > 3) drag.moved = true; b.style.left = Math.max(0, drag.l + (e.clientX - drag.x0) / (mzZoom || 1)) + 'px'; b.style.top = Math.max(0, drag.t + (e.clientY - drag.y0) / (mzZoom || 1)) + 'px'; } });
-      const end = e => { if (rs && e.pointerId === rs.id) rs = null; pts.delete(e.pointerId); lpStop(); if (pinch && pts.size < 2) pinch = null; if (drag && e.pointerId === drag.id) drag = null; }; /* Drag ≠ Pin: مفيش Attach تلقائي عند الإفلات */
+      const end = e => { if (rs && e.pointerId === rs.id) rs = null; pts.delete(e.pointerId); lpStop(); if (pinch && pts.size < 2) pinch = null; if (drag && e.pointerId === drag.id) { if (drag.tap && !drag.moved && e.type === 'pointerup') tblEnterEdit(b, e.clientX, e.clientY); drag = null; } }; /* Drag ≠ Pin: مفيش Attach تلقائي عند الإفلات */
       b.addEventListener('pointerup', end); b.addEventListener('pointercancel', end);
-      note2Boxes.appendChild(b); return b; }
-    const serializeBoxes = () => [...note2Boxes.querySelectorAll('.mmN2box')].map(b => { const sz = boxSize(b); return Object.assign({ id: b.dataset.bid, html: safeNoteHtml(b.querySelector('.mmBoxBody').innerHTML), x: Math.round(parseFloat(b.style.left) || 0), y: Math.round(parseFloat(b.style.top) || 0), w: Math.round(sz.w), h: Math.round(sz.h), bg: b.dataset.bg || 'transparent', bc: b.dataset.bc || '#000000', bo: b.dataset.bo !== '0', img: b.dataset.img || null, rx: Math.round(+b.dataset.rx || 0), ry: Math.round(+b.dataset.ry || 0) }, b.dataset.ts ? { ts: +(+b.dataset.ts).toFixed(3) } : {}); }); /* ts = Text Scale (اختياري؛ الصناديق القديمة بدونه = 1) */
+      note2Boxes.appendChild(b); if (o.tbl) fitTbl(b); return b; }
+    const serializeBoxes = () => [...note2Boxes.querySelectorAll('.mmN2box')].map(b => { const sz = boxSize(b); return Object.assign({ id: b.dataset.bid, html: safeNoteHtml(b.querySelector('.mmBoxBody').innerHTML), x: Math.round(parseFloat(b.style.left) || 0), y: Math.round(parseFloat(b.style.top) || 0), w: Math.round(sz.w), h: Math.round(sz.h), bg: b.dataset.bg || 'transparent', bc: b.dataset.bc || '#000000', bo: b.dataset.bo !== '0', img: b.dataset.img || null, rx: Math.round(+b.dataset.rx || 0), ry: Math.round(+b.dataset.ry || 0) }, b.dataset.ts ? { ts: +(+b.dataset.ts).toFixed(3) } : {}, b.classList.contains('tbl') ? { tbl: 1 } : {}); }); /* ts = Text Scale (اختياري؛ الصناديق القديمة بدونه = 1) */
     /* Migration: أي <img> قديمة جوه notesHtml بتتحول لطبقة مستقلة بنفس مكانها المرئي ومقاسها، ومتتمسحش */
     async function migrateLegacyImgs(id) { const legacy = [...note2Edit.querySelectorAll('img')]; if (!legacy.length) return;
       await Promise.all(legacy.map(im => im.decode ? im.decode().catch(() => { }) : 0)); if (note2Id !== id) return;
@@ -1690,8 +1894,7 @@ window.undo = undoAll; window.redo = redoAll;
     noteImageInput2.onchange = async () => { const f = noteImageInput2.files[0]; noteImageInput2.value = ''; if (!f) { replaceImgTarget = null; return; }
       const data = await fileData(f);
       if (replaceImgTarget) { replaceImgTarget.src = data; replaceImgTarget.alt = f.name; replaceImgTarget = null; if (selImg) positionImgOverlay(); } // استبدال في نفس المكان بنفس الحجم/الموضع
-      else if (note2Layer && note2Id) { const im = await imageDims(data), cw = note2Wrap.clientWidth || 600, w = Math.min(320, cw * 0.7, im.w || 200), h = w * ((im.h || 150) / Math.max(1, im.w || 200));
-        const el = addLayerImg({ src: data, alt: f.name, x: Math.max(0, (note2Wrap.scrollLeft + cw / 2) / (mzZoom || 1) - w / 2), y: Math.max(0, (note2Wrap.scrollTop + note2Wrap.clientHeight / 2) / (mzZoom || 1) - h / 2), w, h }); if (el) selectImage(el); } }; /* الصورة الجديدة بتتضاف لطبقة الصور، مش لتدفق النص */
+      else if (note2Layer && note2Id) await addNoteImage(data, f.name); }; /* الصورة الجديدة بتتضاف لطبقة الصور، مش لتدفق النص */
     /* ---------- Text Size (A− / A+) — Formatting حقيقي على التحديد بس، بمستويات ثابتة ----------
        التطبيق على التحديد بيتم بـinsertHTML (خطوة Undo/Redo أصلية للمتصفح) مش بتعديل DOM يدوي بعد execCommand،
        والتحديد بيتحفظ بعد كل ضغطة عشان A+ / A− يتكرروا على نفس النص. */
@@ -1752,24 +1955,45 @@ window.undo = undoAll; window.redo = redoAll;
       const vv = window.visualViewport, updVV = () => { note2.style.setProperty('--mmvh', (vv ? vv.height : window.innerHeight) + 'px'); note2.style.setProperty('--mmvt', (vv ? vv.offsetTop : 0) + 'px'); if (selImg) positionImgOverlay(); }; /* الكيبورد: المحرر يتبع الـvisual viewport */
       if (vv) { vv.addEventListener('resize', updVV); vv.addEventListener('scroll', updVV); } window.addEventListener('resize', updVV); updVV();
       note2.querySelector('#mmN2link').onclick = () => { const u = prompt('URL', 'https://'); if (u && /^(https?:|mailto:)/i.test(u)) document.execCommand('createLink', false, u); };
-      /* عكس اتجاه الكتابة (RTL ⇄ LTR) للسطر/الفقرة الحالية أو المحدد — dir attribute (متسمّح بيه في الـsanitizer) */
+      /* عكس اتجاه الكتابة (RTL ⇄ LTR) للسطر الحالي أو الأسطر المحددة بس (مش الصفحة) — dir attribute على السطر نفسه (متسمّح بيه في الـsanitizer) */
       (function () {
         const bt = note2.querySelector('#mmN2dir'); bt.addEventListener('mousedown', e => e.preventDefault());
-        const BLK = 'div,p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,pre';
+        const BLK = 'div,p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,pre', STR = 'ul,ol,table,thead,tbody,tfoot,tr';
+        /* وحدات "السطر": كل بلوك فيه سطر واحد = وحدة، وكل أسطر متفصلة بـ<br> جوه نفس البلوك = وحدات منفصلة (بتتلف في div لوحدها وقت الحاجة) */
+        const units = C => { const out = []; let run = [];
+          const idxOf = n => Array.prototype.indexOf.call(C.childNodes, n);
+          const flush = br => { if (br || run.some(n => !(n.nodeType === 3 && !n.nodeValue.trim()))) out.push({ kind: 'run', C, nodes: run, br, idxOf }); run = []; };
+          [...C.childNodes].forEach(ch => {
+            if (ch.nodeName === 'BR') flush(ch);
+            else if (ch.nodeType === 1 && ch.matches(BLK + ',' + STR)) { flush(null); const sub = units(ch), st = ch.matches(STR);
+              if (!st && (sub.length === 0 || (sub.length === 1 && sub[0].kind === 'run'))) out.push({ kind: 'el', el: ch }); else out.push(...sub); }
+            else run.push(ch); });
+          flush(null); return out; };
+        const span = u => { if (u.kind === 'el') return [[u.el, 0], [u.el, u.el.childNodes.length]]; const C = u.C, f = u.nodes[0] || u.br; return [[C, u.idxOf(f)], [C, u.br ? u.idxOf(u.br) : C.childNodes.length]]; };
+        const P = (n, o) => { const r = document.createRange(); r.setStart(n, o); r.collapse(true); return r; }, cmp = (a, b) => a.compareBoundaryPoints(Range.START_TO_START, b);
+        const wrapRun = u => { const d = document.createElement('div'); u.C.insertBefore(d, u.nodes[0] || u.br); u.nodes.forEach(n => d.appendChild(n)); if (u.br) { if (u.nodes.length) u.br.remove(); else d.appendChild(u.br); } if (!d.childNodes.length) d.appendChild(document.createElement('br')); return d; };
+        function flipLines(root, range, getDir) { const us = units(root), rs = P(range.startContainer, range.startOffset), re = P(range.endContainer, range.endOffset);
+          const sp = us.map(u => { const [a, b] = span(u); return [P(a[0], a[1]), P(b[0], b[1])]; });
+          const full = (os, oe) => { const r = document.createRange(); r.setStart(os.startContainer, os.startOffset); r.setEnd(oe.startContainer, oe.startOffset); if (r.collapsed) return false; const f = r.cloneContents(); return f.textContent.length > 0 || !!f.querySelector('img,br,[data-mmeq],.mmN2eq'); };
+          let hits = us.filter((u, i) => { const [s, e] = sp[i]; if (cmp(rs, e) > 0 || cmp(re, s) < 0) return false; if (range.collapsed) return true;
+            if (cmp(rs, s) <= 0 && cmp(re, e) >= 0) return true; /* السطر جوه التحديد بالكامل (حتى لو فاضي) */
+            return full(cmp(rs, s) >= 0 ? rs : s, cmp(re, e) <= 0 ? re : e); }); /* مجرد لمس حدّ السطر (بداية/نهاية) مايحسبش */
+          if (!hits.length && us.length) { let k = 0; us.forEach((u, i) => { if (cmp(sp[i][0], rs) <= 0) k = i; }); hits = [us[k]]; } /* الكيرسور بين بلوكين → أقرب سطر */
+          if (!hits.length) { const d = document.createElement('div'); d.innerHTML = '<br>'; root.appendChild(d); hits = [{ kind: 'el', el: d }]; } /* ملاحظة فاضية */
+          const els = hits.map(u => u.kind === 'el' ? u.el : wrapRun(u)), next = getDir(els[0]) === 'rtl' ? 'ltr' : 'rtl';
+          els.forEach(el => { el.setAttribute('dir', next); if (/^(left|right)$/i.test(el.style.textAlign || '')) el.style.textAlign = ''; }); return { els, next }; }
         bt.onclick = () => {
           const ed = note2Edit; if (!ed) return; const sel = getSelection();
-          if (!sel.rangeCount || !ed.contains(sel.anchorNode)) { ed.focus(); const r0 = document.createRange(); r0.selectNodeContents(ed); r0.collapse(false); sel.removeAllRanges(); sel.addRange(r0); }
-          const inBlock = n => { for (let x = n.nodeType === 3 ? n.parentNode : n; x && x !== ed; x = x.parentNode) if (x.matches && x.matches(BLK)) return x; return null; };
-          if (sel.isCollapsed && !inBlock(sel.anchorNode)) document.execCommand('formatBlock', false, 'div');   /* سطر مباشر في الـroot → نلفّه في div */
-          const r = sel.getRangeAt(0);
-          let blocks = [...ed.querySelectorAll(BLK)].filter(b => r.intersectsNode(b));
-          const s0 = inBlock(r.startContainer); if (s0 && !blocks.includes(s0)) blocks.push(s0);
-          blocks = blocks.filter(b => !blocks.some(o => o !== b && b.contains(o)));   /* أعمق بلوك بس */
-          if (!blocks.length) blocks = [ed];
-          const next = getComputedStyle(blocks[0]).direction === 'rtl' ? 'ltr' : 'rtl';
-          blocks.forEach(b => { b.setAttribute('dir', next); if (b.style && /^(left|right)$/i.test(b.style.textAlign || '')) b.style.textAlign = ''; });
-          bt.title = 'عكس اتجاه الكتابة — الحالي: ' + next.toUpperCase();
-          ed.dispatchEvent(new Event('input', { bubbles: true }));
+          const rootOf = n => { const el = n && (n.nodeType === 1 ? n : n.parentElement); if (!el) return null; const bx = el.closest && el.closest('.mmBoxBody'); if (bx && note2.contains(bx)) return bx; return ed.contains(el) ? ed : null; };
+          let root = sel.rangeCount ? rootOf(sel.anchorNode) : null, range;
+          if (root) { range = sel.getRangeAt(0).cloneRange(); if (!(root.contains(range.startContainer) && root.contains(range.endContainer))) range.collapse(true); }
+          else { root = ed; ed.focus(); range = document.createRange(); range.selectNodeContents(ed); range.collapse(false); }   /* مفيش كيرسور → آخر سطر بس (مش الصفحة كلها) */
+          const sv = { sc: range.startContainer, so: range.startOffset, ec: range.endContainer, eo: range.endOffset, col: range.collapsed };
+          const { els, next } = flipLines(root, range, el => getComputedStyle(el).direction);   /* بيعكس السطر/الأسطر المحددة بس */
+          const r = document.createRange(); if (sv.sc.nodeType === 3 && sv.ec.nodeType === 3 && sv.sc.isConnected && sv.ec.isConnected) { r.setStart(sv.sc, sv.so); r.setEnd(sv.ec, sv.eo); } else { r.setStart(els[0], 0); if (sv.col) r.collapse(true); else r.setEnd(els[els.length - 1], els[els.length - 1].childNodes.length); }
+          sel.removeAllRanges(); sel.addRange(r);
+          bt.title = 'عكس اتجاه السطر الحالي (RTL ⇄ LTR) — آخر اتجاه: ' + next.toUpperCase();
+          root.dispatchEvent(new Event('input', { bubbles: true }));
         };
       })();
       note2.querySelector('#mmN2eq').onclick = () => { if (window.MMMath) window.MMMath.toggle(); };
@@ -1777,7 +2001,8 @@ window.undo = undoAll; window.redo = redoAll;
       if (window.MMEq) window.MMEq.noteAdapter = { match: h => h === note2Edit && !!note2 && note2.classList.contains('show'), add: t => !!addEqAtCenter(t), openNew: () => !!(note2 && note2.classList.contains('show') && newEqDialog()) }; /* خانة المعادلة تسأل الـAdapter: لو الكتابة في نص الملاحظة → Equation Box حر زي الصورة؛ جوه Chat Box أو لتعديل معادلة inline قديمة → زي ما كانت */
       note2.querySelector('#mmN2eqf').onclick = () => { if (!window.MMEq) return; if (!window.MMEq.apply()) newEqDialog(); }; /* مفيش مؤشر في النص (مثلاً صورة محددة) → برضه بتتضاف في نص الشاشة */
       note2Wrap.addEventListener('dblclick', e => { const el = imageAtPoint(e.clientX, e.clientY); if (isEqEl(el)) { e.preventDefault(); e.stopPropagation(); editLayerEq(el); } }, true); /* دبل كليك على Equation Box = تعديلها */ /* Equation Format: محرر الملاحظة أو الـChat Box حسب مكان التحديد */ /* Math Input (بدل إدراج √x) */
-      note2.querySelector('#mmN2table').onclick = () => document.execCommand('insertHTML', false, '<table><tbody><tr><td> </td><td> </td></tr><tr><td> </td><td> </td></tr></tbody></table>');
+      note2.querySelector('#mmN2table').onclick = () => { const cw = note2Wrap.clientWidth || 600, z = mzZoom || 1, w = Math.min(260, cw / z * 0.7), c = '<td><br></td>', r = '<tr>' + c + c + '</tr>',
+        b = addBox({ tbl: 1, bo: false, html: '<table><tbody>' + r + r + '</tbody></table>', x: Math.max(0, (note2Wrap.scrollLeft + cw / 2) / z - w / 2), y: Math.max(0, note2Wrap.scrollTop / z + 40), w }); deselectImage(); selectBox(b); b.querySelector('.mmBoxBody').focus(); caretIn(b.querySelector('td')); }; /* جدول حر: Box بنفس نظام الصندوق (سحب من ✥، تكبير من الزاوية، قائمة بالكليك يمين/ضغطة مطوّلة) */
       note2.querySelector('#mmN2img').onclick = () => noteImageInput2.click(); note2.querySelector('#mmN2close').onclick = () => closeNote2(true); note2.querySelector('#mmN2save').onclick = () => closeNote2(true);
       /* Image select/move/resize/delete — طبقة UI فوق نفس الـcontenteditable، مفيش Editor تاني */
       note2.addEventListener('pointerdown', e => { if (e.target.closest && e.target.closest('#mmImgOverlay2')) return;
@@ -1793,19 +2018,22 @@ window.undo = undoAll; window.redo = redoAll;
           if (!isImgLocked(img)) { touchPts.set(e.pointerId, { x: e.clientX, y: e.clientY }); if (touchPts.size >= 2) startPinch(); else startMove(e); }
           if (touchy && lpTouchIds.size === 1) imgLPArm(e, img, false); /* Long Press: بيتلغي بأول حركة/Drag/إصبع تاني/رفع */
           return; }
-        imgLPStop(); deselectImage(); deselectBox(); }, true);
+        imgLPStop(); deselectImage(); deselectBox(); blankLPArm(e); }, true);
       /* Right Click على الصورة فقط (مش global): بيفتح Image Settings. Right Click على Box بيفضل على سلوك الـBox، وفي Move/Zoom بيتعامل معاه listener الخاص بالأداة */
       note2Wrap.addEventListener('contextmenu', e => { if (mzOn || (e.target.closest && e.target.closest('.mmN2box'))) return;
         if (e.pointerType && e.pointerType !== 'mouse' && imgMoved) { e.preventDefault(); return; } /* لمس + حركة = Drag مش Long Press */
-        const img = imageAtPoint(e.clientX, e.clientY); if (!img) return; /* أي مكان تاني: Browser/Text behavior زي ما هو */
+        const img = imageAtPoint(e.clientX, e.clientY); if (!img) { if (imgClip && !textAtPoint(e.clientX, e.clientY)) { e.preventDefault(); e.stopPropagation(); openPasteMenu(e.clientX, e.clientY); } return; } /* أي مكان تاني: Browser/Text behavior زي ما هو (إلا مكان فاضي + فيه صورة/معادلة منسوخة = قائمة لصق) */
         e.preventDefault(); e.stopPropagation(); selectImage(img); openImgMenu(img, e.clientX, e.clientY, !!(e.pointerType && e.pointerType !== 'mouse')); });
       note2Edit.addEventListener('keydown', e => { if (selImg && !isImgLocked(selImg) && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); deleteSelectedImage(); } }, true);
       note2Wrap.addEventListener('scroll', () => { if (selImg) positionImgOverlay(); hideImgMenu(); }, true);
       /* touch-action بيتقرر وقت أول لمسة، والصورة لسه مش متحددة فيها → نمنع Scroll/Browser-Pinch-Zoom من هنا (على #mmN2wrap بس، وعلى الصور غير المقفولة فقط) */
       note2Wrap.addEventListener('touchstart', e => { if (mzOn || e.target.closest('.mmN2box')) return; const t = e.changedTouches[0];
         if (e.touches.length >= 2 ? (selImg && !isImgLocked(selImg)) : (() => { const im = imageAtPoint(t.clientX, t.clientY); return im && !isImgLocked(im); })()) e.preventDefault(); }, { passive: false }); }
-    function openNote2(id) { makeNote2(); imgLPStop(); lpTouchIds.clear(); hideImgMenu(); mzResetView(); mzSetOn(false); const o = C.get(id); if (!o) return; deselectImage(); replaceImgTarget = null; note2Id = id; note2Edit.innerHTML = o.data.notesHtml || (o.data.notes ? '<div>' + esc(o.data.notes) + '</div>' : '<div><br></div>'); const t = note2.querySelector('#mmN2title'); if (t) t.textContent = strip(o.data.richHtml) || o.data.title || 'Node'; note2.classList.add('show'); note2Layer.innerHTML = ''; (o.data.noteImgs || []).forEach(it => { if (it && it.eq) addLayerEq(it); else addLayerImg(it); }); note2Boxes.innerHTML = ''; selBox = null; (o.data.noteBoxes || []).forEach(addBox); note2Wrap.scrollTop = 0; note2Edit.focus(); migrateLegacyImgs(id); }
-    function closeNote2(save) { if (!note2Id) return; hideBoxMenu(); imgLPStop(); lpTouchIds.clear(); hideImgMenu(); deselectImage(); replaceImgTarget = null; if (save) { const h = safeNoteHtml(note2Edit.innerHTML); C.set(note2Id, { 'data.notesHtml': h, 'data.notes': strip(h), 'data.noteImgs': serializeLayer(), 'data.noteBoxes': serializeBoxes() }, 'note'); } note2Id = null; note2.classList.remove('show'); refreshNodeDom(); }
+    function migrateLegacyTables() { const ts = [...note2Edit.querySelectorAll('table')].filter(t => !t.parentElement.closest('table')); if (!ts.length) return; const host = note2Wrap.getBoundingClientRect(), sx = note2Wrap.scrollLeft, sy = note2Wrap.scrollTop;
+      ts.map(t => { const r = t.getBoundingClientRect(); return { t, o: { tbl: 1, bo: false, html: t.outerHTML, x: Math.max(0, r.left - host.left + sx), y: Math.max(0, r.top - host.top + sy), w: Math.max(180, r.width) } }; })
+        .forEach(({ t, o }) => { addBox(o); const p = t.parentNode; t.remove(); if (p && p !== note2Edit && !p.childNodes.length) p.appendChild(document.createElement('br')); }); } /* الجداول القديمة (جوه النص) بتتحول لجداول حرة مكانها */
+    function openNote2(id) { makeNote2(); imgLPStop(); lpTouchIds.clear(); hideImgMenu(); mzResetView(); mzSetOn(false); const o = C.get(id); if (!o) return; deselectImage(); replaceImgTarget = null; note2Id = id; note2Edit.innerHTML = o.data.notesHtml || (o.data.notes ? '<div>' + esc(o.data.notes) + '</div>' : '<div><br></div>'); const t = note2.querySelector('#mmN2title'); if (t) t.textContent = strip(o.data.richHtml) || o.data.title || 'Node'; note2.classList.add('show'); note2Layer.innerHTML = ''; (o.data.noteImgs || []).forEach(it => { if (it && it.eq) addLayerEq(it); else addLayerImg(it); }); note2Boxes.innerHTML = ''; selBox = null; (o.data.noteBoxes || []).forEach(addBox); note2Wrap.scrollTop = 0; note2Edit.focus(); migrateLegacyImgs(id); migrateLegacyTables(); }
+    function closeNote2(save) { if (!note2Id) return; hideBoxMenu(); hidePasteMenu(); imgLPStop(); lpTouchIds.clear(); hideImgMenu(); deselectImage(); replaceImgTarget = null; if (save) { const h = safeNoteHtml(note2Edit.innerHTML); C.set(note2Id, { 'data.notesHtml': h, 'data.notes': strip(h), 'data.noteImgs': serializeLayer(), 'data.noteBoxes': serializeBoxes() }, 'note'); } note2Id = null; note2.classList.remove('show'); refreshNodeDom(); }
 
     /* ---------- Group: Image Control داخل Rich Note (Select/Move/Resize/Delete/Replace) ----------
        Overlay (Handles/زرار الحذف والاستبدال) عنصر UI برا #mmN2edit تمامًا، فمش بيتحفظ
@@ -1847,7 +2075,7 @@ window.undo = undoAll; window.redo = redoAll;
         onApply: res => { if (!im.isConnected) return false; const oW = parseFloat(im.style.width) || im.offsetWidth || 120, oH = parseFloat(im.style.height) || im.offsetHeight || 90, h = Math.max(8, Math.round(oW * res.h / Math.max(1, res.w)));
           im.setAttribute('src', res.png); im.__proj = res.project; im.__pv = window.MM_hash(res.png); im.style.height = h + 'px'; layoutAttached(im, oW, oH); if (selImg === im) positionImgOverlay(); return true; } }); }
     function ensureImgMenu() { if (imgMenu) return imgMenu; imgMenu = document.createElement('div'); imgMenu.id = 'mmImgMenu'; imgMenu.setAttribute('role', 'menu'); imgMenu.dir = 'rtl';
-      imgMenu.innerHTML = '<button id="mmImgLock2" data-a="lock"></button><button id="mmImgRepl2" data-a="edit">✏️ تعديل (Edit)</button><button id="mmImgPaint2" data-a="paint">🎨 تعديل في Paint (صورة + دوائر)</button>' +
+      imgMenu.innerHTML = '<div class="mmClipRow"><button data-a="copy">📋 نسخ</button><button data-a="cut">✂️ قص</button><button data-a="paste">📄 لصق</button></div><button id="mmImgLock2" data-a="lock"></button><button id="mmImgRepl2" data-a="edit">✏️ تعديل (Edit)</button><button id="mmImgPaint2" data-a="paint">🎨 تعديل في Paint (صورة + دوائر)</button>' +
         '<label class="mmTiltRow"><span>🔄 إمالة / تدوير (Tilt) <b id="mmImgTiltVal2">0°</b></span><input id="mmImgTilt2" type="range" min="-180" max="180" step="1" value="0"></label>' +
         '<button id="mmImgTiltReset2" data-a="tilt0">↺ إلغاء الإمالة</button><button id="mmImgPin2" data-a="pin"></button><button id="mmImgUnpin2" data-a="unpin">📍 إلغاء تثبيت الصناديق (Unpin)</button><button id="mmImgDel2" data-a="del" class="mmImgDel">🗑 حذف (Delete)</button>';
       document.body.appendChild(imgMenu);
@@ -1858,6 +2086,7 @@ window.undo = undoAll; window.redo = redoAll;
       imgMenu.addEventListener('click', e => { const btn = e.target.closest && e.target.closest('button[data-a]'); if (!btn || btn.disabled) return; e.preventDefault(); e.stopPropagation();
         if (imgMenuGuard && Date.now() - imgMenuAt < 350) return; /* لمس فقط: الإصبع لسه رافع من الـLong Press — ما نضغطش زرار بالغلط */
         const im = imgMenuTarget, a = btn.dataset.a; if (!im || !im.isConnected) { hideImgMenu(); return; }
+        if (a === 'copy' || a === 'cut' || a === 'paste') { hideImgMenu(); imgClipAction(a, im); return; } /* نسخ/قص/لصق للصور والمعادلات (ملاحظة + عقدة) */
         if (im.dataset.nodeImg === '1' && window.MM.nodeImg) { hideImgMenu(); window.MM.nodeImg.menuAction(im, a); return; } /* صورة جوّه Node: نفس القايمة، تنفيذ على data.images */
         if (a === 'lock') { toggleImgLock(im); hideImgMenu(); }
         else if (a === 'edit') { if (isEqEl(im)) { hideImgMenu(); editLayerEq(im); } else { replaceImgTarget = im; hideImgMenu(); noteImageInput2.click(); } } /* نفس Edit الحالي: استبدال الصورة في نفس المكان/الحجم */
@@ -1907,6 +2136,93 @@ window.undo = undoAll; window.redo = redoAll;
     function deselectImage() { hideImgMenu(); if (selImg) { selImg.classList.remove('mmImgSel2', 'mmImgLocked2'); } if (note2Wrap) note2Wrap.style.touchAction = mzOn ? 'none' : ''; selImg = null; if (imgOverlay) imgOverlay.style.display = 'none'; imgDrag = null; touchPts.clear(); }
     function deleteSelectedImage(img) { img = img || selImg; if (!img) return; /* نفس الـdelete logic الموجودة — الـLock ما بيمنعش الحذف من Image Settings، ومفيش فك قفل مؤقت */
       attachedBoxes(img.dataset.iid).forEach(detachBox); if (imgDrag) imgDrag = null; if (mzG && mzG.img === img) mzG = null; hideImgMenu(); const was = img === selImg; img.remove(); if (was) deselectImage(); } /* حذف صورة يفك ارتباط الـBoxes من غير ما تضيع */
+    /* ---------- Copy / Cut / Paste للصور والمعادلات (Rich Note + صور العقد) ----------
+       نفس قائمة Image Settings (كليك يمين / ضغطة مطوّلة): نسخ / قص / لصق. الحافظة داخلية (imgClip) + نسخة في حافظة النظام (PNG للصورة، نص للمعادلة) لو المتصفح سمح.
+       اللصق: على صورة/معادلة = جنبها (أو في نفس العقدة لو صورة عقدة)، وعلى مكان فاضي في الملاحظة = قائمة لصق صغيرة، وفي قائمة العقدة = بند لصق. */
+    document.head.appendChild($('style', 0, `#mmImgMenu{max-height:calc(100vh - 12px);overflow-y:auto}
+#mmImgMenu .mmClipRow{display:flex;gap:2px}#mmImgMenu .mmClipRow button{flex:1;justify-content:center;white-space:nowrap;padding:7px 4px}
+#mmPasteMenu{position:fixed;z-index:2200;display:none;min-width:150px;padding:3px;background:#fff;border:1px solid #c9c5b8;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);font-size:12px;direction:rtl;-webkit-user-select:none;user-select:none}
+#mmPasteMenu button{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:0;background:none;text-align:right;font:inherit;cursor:pointer;border-radius:4px}#mmPasteMenu button:hover{background:#f0eee7}`));
+    let imgClip = null, imgClipSig = 0, imgClipStale = false, imgClipTxt = '', blankLP = null, pasteMenu = null, pasteMenuAt = 0;
+    window.addEventListener('blur', () => { imgClipStale = true; }); /* المستخدم سابع الصفحة: ممكن يكون نسخ حاجة برا، فاللصق الجاي يفحص حافظة النظام الأول */
+    function clipToast(m) { const t = document.createElement('div'); t.textContent = m; t.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#222;color:#fff;padding:8px 14px;border-radius:10px;font-size:13px;z-index:2300;max-width:90%;pointer-events:none'; document.body.appendChild(t); setTimeout(() => t.remove(), 1600); }
+    function toPngData(src) { return new Promise(res => { const i = new Image(); i.onload = () => { try { const c = document.createElement('canvas'); c.width = i.naturalWidth || 120; c.height = i.naturalHeight || 90; c.getContext('2d').drawImage(i, 0, 0); res(c.toDataURL('image/png')); } catch (e) { res(''); } }; i.onerror = () => res(''); i.src = src; }); }
+    function imgClipRead(im) { /* عنصر (صورة/معادلة، ملاحظة أو عقدة) → كل خصائصه (src/eq, alt, w, h, rot, locked, proj+pv) ماعدا الهوية والمكان — نفس مجموعة الخصائص اللي بتتحفظ مع الملاحظة */
+      if (im.dataset.nodeImg === '1') { const NI = window.MM.nodeImg, d = NI && NI.getImg && NI.getImg(im.dataset.nodeId, im.dataset.iid); if (!d) return null;
+        const o = d.eq ? { eq: String(d.eq) } : d.src ? { src: d.src, alt: d.alt || '' } : null; if (!o) return null;
+        o.w = +d.w || 0; o.h = +d.h || 0; o.rot = +d.rot || 0; if (d.locked) o.locked = true; if (d.src && d.proj && d.pv === window.MM_hash(d.src)) { o.proj = d.proj; o.pv = d.pv; } return o; }
+      const o = serializeLayerEl(im); if (!(o.src || o.eq)) return null; delete o.id; delete o.x; delete o.y; delete o.s; o.rot = +o.rot || 0; return o; }
+    function imgClipToSystem(c) { try { if (!navigator.clipboard) return;
+      if (c.eq) { navigator.clipboard.writeText(c.eq).catch(() => { }); return; }
+      if (!window.ClipboardItem || !navigator.clipboard.write) return;
+      const p = new Promise((res, rej) => { const i = new Image(); i.onload = () => { try { const cv = document.createElement('canvas'); cv.width = i.naturalWidth || c.w || 120; cv.height = i.naturalHeight || c.h || 90; cv.getContext('2d').drawImage(i, 0, 0); cv.toBlob(b => { if (b) { imgClipSig = b.size; res(b); } else rej(new Error('blob')); }, 'image/png'); } catch (e) { rej(e); } }; i.onerror = () => rej(new Error('img')); i.src = c.src; });
+      navigator.clipboard.write([new ClipboardItem({ 'image/png': p })]).catch(() => { }); } catch (e) { } }
+    async function imgClipResolve(file, internal) { /* صورة من حافظة النظام (لو جاية من برا) وإلا الحافظة الداخلية */
+      if (internal && imgClip) return imgClip; /* Ctrl+V لنص معادلة اتنسخت من جوه: الصندوق نفسه من غير قراءة حافظة النظام */
+      if (file) { /* Ctrl+V: الصورة جاية مع الـevent نفسه — لو هي نفس اللي نسخناها من جوه (نفس حجم الـPNG) نستخدم الحافظة الداخلية بكل خصائصها، وإلا تتعامل كصورة خارجية */
+        if (imgClip && imgClipSig && file.size === imgClipSig) return imgClip; const src = await fileData(file), d = await imageDims(src); return { src, alt: file.name || '', w: d.w, h: d.h, rot: 0, ext: true }; }
+      if (!imgClip || imgClipStale) { try { if (navigator.clipboard && navigator.clipboard.read) { const items = await navigator.clipboard.read();
+        for (const it of items) { const t = it.types.find(x => x.indexOf('image/') === 0); if (!t) continue; const b = await it.getType(t);
+          if (!imgClip || b.size !== imgClipSig) { const src = await fileData(b), d = await imageDims(src); imgClipStale = false; return { src, alt: '', w: d.w, h: d.h, rot: 0, ext: true }; } break; } } } catch (e) { } }
+      imgClipStale = false; return imgClip; }
+    async function imgClipPaste(o) { const c = await imgClipResolve(o.file, o.internal); if (!c) { clipToast('مفيش صورة أو معادلة منسوخة'); return; }
+      const t = o.target, nid = o.node || (t && t.dataset && t.dataset.nodeImg === '1' ? t.dataset.nodeId : null);
+      if (nid) { const NI = window.MM.nodeImg; if (!NI || !C.get(nid)) return; if (c.eq) NI.insertEq(nid, c.eq, c); else await NI.insert(nid, c.src, c.w, c.h, c.alt || '', c); renderDeep(); refreshNodeDom(); return; }
+      if (!note2 || !note2Id || !note2Layer || !note2.classList.contains('show')) { clipToast('افتح ملاحظة أو اختار عقدة الأول'); return; }
+      let pos = null; if (t && t.isConnected) { const r = imgRect(t); pos = { x: r.l + 24, y: r.t + 24 }; } else if (o.at) { const cr = note2Content.getBoundingClientRect(), z = mzZoom || 1; pos = { x: (o.at.x - cr.left) / z, y: (o.at.y - cr.top) / z }; }
+      if (pos) { pos.x = Math.max(0, pos.x); pos.y = Math.max(0, pos.y); } let w = +c.w > 0 ? +c.w : 120, h = +c.h > 0 ? +c.h : 90, el = null;
+      const mid = () => { const cw = note2Wrap.clientWidth || 600, z = mzZoom || 1; return { x: Math.max(0, (note2Wrap.scrollLeft + cw / 2) / z - w / 2), y: Math.max(0, (note2Wrap.scrollTop + note2Wrap.clientHeight / 2) / z - h / 2) }; }; /* من غير مكان محدد (Ctrl+V): نص الشاشة الظاهر زي الإضافة */
+      if (c.eq) { const p = pos || mid(); el = addLayerEq(Object.assign({}, c, { x: p.x, y: p.y, w, h })); }
+      else { let src = c.src; if (!safeImgSrc(src)) src = await toPngData(src); if (!src) { clipToast('صيغة الصورة مش مدعومة'); return; }
+        if (c.ext) el = await addNoteImage(src, c.alt || '', pos); /* صورة من برّه = نفس الإضافة بالظبط (المقاس، التحديد) */
+        else { const p = pos || mid(); el = addLayerImg(Object.assign({}, c, { src, alt: c.alt || '', x: p.x, y: p.y, w, h })); } } /* نسخة من جوه = نسخة كاملة بكل الخصائص (rot/locked/Paint) */
+      if (!el) { clipToast('تعذّر اللصق'); return; } deselectBox(); selectImage(el); }
+    function imgClipAction(a, im) { if (a === 'paste') { imgClipPaste({ target: im }); return; }
+      const c = imgClipRead(im); if (!c) { clipToast('مش قادر أنسخ العنصر ده'); return; }
+      imgClip = c; imgClipSig = 0; imgClipStale = false; imgClipTxt = c.eq ? String(c.eq) : ''; imgClipToSystem(c);
+      if (a === 'cut') { if (im.dataset.nodeImg === '1') window.MM.nodeImg.remove(im.dataset.nodeId, im.dataset.iid); else deleteSelectedImage(im); }
+      clipToast(a === 'cut' ? 'تم القص' : 'تم النسخ'); }
+    function hidePasteMenu() { if (pasteMenu) pasteMenu.style.display = 'none'; }
+    function openPasteMenu(x, y) { if (!pasteMenu) { pasteMenu = document.createElement('div'); pasteMenu.id = 'mmPasteMenu'; pasteMenu.dir = 'rtl'; pasteMenu.innerHTML = '<button type="button">📄 لصق صورة/معادلة هنا</button>'; document.body.appendChild(pasteMenu);
+        pasteMenu.addEventListener('contextmenu', e => e.preventDefault());
+        pasteMenu.firstChild.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if (Date.now() - pasteMenuAt < 350) return; const at = pasteMenu._at; hidePasteMenu(); imgClipPaste({ at }); });
+        document.addEventListener('pointerdown', e => { if (pasteMenu.style.display === 'block' && !pasteMenu.contains(e.target)) hidePasteMenu(); }, true);
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') hidePasteMenu(); }, true); }
+      if (pasteMenu.style.display === 'block' && Date.now() - pasteMenuAt < 700) return; /* لا تفتح مرتين (Long Press + contextmenu) */
+      pasteMenu._at = { x, y }; pasteMenu.style.display = 'block'; pasteMenuAt = Date.now(); const w = pasteMenu.offsetWidth || 160, h = pasteMenu.offsetHeight || 40;
+      pasteMenu.style.left = Math.max(4, Math.min(x, (window.innerWidth || 800) - w - 4)) + 'px'; pasteMenu.style.top = Math.max(4, Math.min(y, (window.innerHeight || 600) - h - 4)) + 'px'; }
+    function blankLPStop() { if (blankLP) { clearTimeout(blankLP.t); blankLP = null; } }
+    function blankLPArm(e) { blankLPStop(); if (!imgClip || e.pointerType === 'mouse' || mzOn || lpTouchIds.size > 1 || textAtPoint(e.clientX, e.clientY)) return;
+      const x0 = e.clientX, y0 = e.clientY; blankLP = { id: e.pointerId, x0, y0, t: setTimeout(() => { blankLP = null; if (navigator.vibrate) navigator.vibrate(25); openPasteMenu(x0, y0); }, IMG_LP_MS) }; } /* Long Press على مكان فاضي (لمس) */
+    document.addEventListener('pointermove', e => { if (blankLP && e.pointerId === blankLP.id && Math.hypot(e.clientX - blankLP.x0, e.clientY - blankLP.y0) > IMG_LP_MOVE) blankLPStop(); }, true);
+    ['pointerup', 'pointercancel'].forEach(t => document.addEventListener(t, blankLPStop, true));
+    Object.assign(window.MM, { imgClipHas: () => !!imgClip, imgPasteNode: nid => imgClipPaste({ node: nid }) });
+    /* ---- Copy / Cut / Paste كـObject للصور وصناديق المعادلة (Ctrl/Cmd + C / X / V) — نفس مسار القايمة (imgClipAction / imgClipPaste) ----
+       C/X: على العنصر المحدد (ملاحظة أو عقدة)؛ مفيش تعارض مع نسخ نص متحدد أو input/textarea؛ القص على عنصر مقفول بينسخ بس (زي Delete).
+       V: صورة (ملف) = زي الإضافة بالظبط، أو نسخة من جوه بكل خصائصها؛ ونص معادلة اتنسخت من جوه = الصندوق نفسه (Ctrl+Shift+V = النص كنص).
+       مكان اللصق: الملاحظة المفتوحة، أو العقدة المحددة (حتى لو محرر نصها مفتوح) لو مفيش ملاحظة. HTML فيه صور من غير ملف صورة → الصور بتتحوّل لطبقة (migrateLegacyImgs). */
+    let pasteAsText = false;
+    document.addEventListener('keydown', e => { pasteAsText = !!((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key || '').toLowerCase() === 'v'); }, true);
+    const hasTextSel = () => { const s = window.getSelection && window.getSelection(); return !!(s && !s.isCollapsed && String(s).trim()); };
+    document.addEventListener('keydown', e => { if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey) return; const k = (e.key || '').toLowerCase(); if (k !== 'c' && k !== 'x') return;
+      const t = e.target; if (t && t.closest && t.closest('input,textarea,select')) return;
+      const noteOpen = !!(note2 && note2.classList.contains('show')); let el = null, locked = false;
+      if (noteOpen) { if (selImg && selImg.isConnected) { el = selImg; locked = isImgLocked(el); } }
+      else { if (t && t.isContentEditable) return; const NI = window.MM.nodeImg, s = NI && NI.selected; if (s) { el = document.querySelector('[data-node-img="1"][data-node-id="' + CSS.escape(String(s.nodeId)) + '"][data-iid="' + CSS.escape(String(s.imgId)) + '"]'); const d = el && NI.getImg(s.nodeId, s.imgId); locked = !!(d && d.locked); } }
+      if (!el || hasTextSel()) return; e.preventDefault(); e.stopPropagation();
+      if (k === 'x' && locked) { imgClipAction('copy', el); clipToast('العنصر مقفول: اتنسخ من غير قص'); return; }
+      imgClipAction(k === 'x' ? 'cut' : 'copy', el); }, true);
+    document.addEventListener('paste', e => { const cd = e.clipboardData; if (!cd || e.defaultPrevented) return;
+      const t = e.target; if (t && t.nodeType === 1 && t.closest && t.closest('input,textarea,select')) return;
+      const noteOpen = !!(note2 && note2Id && note2.classList.contains('show')); let opt = {};
+      if (noteOpen) { if (t && t.nodeType === 1 && t !== document.body && !note2.contains(t)) return; }
+      else { const ne = t && t.closest && t.closest('.mmRichNode2'); /* محرر نص العقدة مفتوح: نص العقدة مبيحتفظش بصور (safeNodeHtml بتمسح <img> عند الحفظ) فالصورة بتتحط كصورة للعقدة نفسها، والعقدة بتتلاءم معاها زي الإضافة */
+        if (ne && ne.dataset.id && C.get(ne.dataset.id)) opt = { node: ne.dataset.id };
+        else { if (t && t.isContentEditable) return; const n = C.ui.sel.size === 1 ? C.get([...C.ui.sel][0]) : null; if (!n || n.type !== 'mindnode') return; opt = { node: n.id }; } }
+      const fs = [...(cd.files || [])].filter(f => /^image\//i.test(f.type)), its = !fs.length && cd.items ? [...cd.items].filter(i => i.kind === 'file' && /^image\//i.test(i.type)).map(i => i.getAsFile()).filter(Boolean) : [], f = fs[0] || its[0];
+      if (f) { e.preventDefault(); imgClipPaste(Object.assign({ file: f }, opt)); return; }
+      if (imgClip && imgClip.eq && imgClipTxt && !pasteAsText && cd.getData('text/plain') === imgClipTxt) { e.preventDefault(); imgClipPaste(Object.assign({ internal: true }, opt)); return; }
+      if (noteOpen && t && note2Edit.contains(t) && /<img[\s>]/i.test(cd.getData('text/html') || '')) { const id = note2Id; setTimeout(() => migrateLegacyImgs(id), 0); } }, true); /* capture: لازم يشتغل قبل handler اللصق بتاع بلوك المعادلات (هو كمان capture)، وإلا بيحوّل نص المعادلة لصيغة ويمنعنا */
     function startMove(e) { if (!selImg || isImgLocked(selImg)) return; e.preventDefault(); e.stopPropagation();
       imgDrag = { mode: 'move', pid: e.pointerId, x0: e.clientX, y0: e.clientY, startLeft: parseFloat(selImg.style.left) || 0, startTop: parseFloat(selImg.style.top) || 0 }; }
     const IMG_MIN = 32, IMG_MAX = 8000, imgMin = el => isEqEl(el) ? 14 : IMG_MIN; /* المعادلة تقدر تصغر أكتر من الصورة (نصها صغير أصلاً) */ /* حد أدنى يخلّي الصورة قابلة للإمساك، وحد أقصى كبير بيناسب الـFreeform Workspace */
@@ -3208,7 +3524,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
     /* ----- Mind Map Toolbar (data-a) ----- */
     child:   { name: 'إضافة فرع (Add Child)', use: 'ينشئ عقدة جديدة كفرع من العقدة المحددة ويفتح محررها مباشرة.', info: 'بدون تحديد تُنشأ عقدة رئيسية في منتصف الشاشة.', keys: 'Tab' },
     sibling: { name: 'إضافة شقيق (Add Sibling)', use: 'ينشئ عقدة في نفس مستوى العقدة المحددة، أسفلها مباشرة، ويفتح محررها.', info: 'يتطلب تحديد عقدة واحدة.', keys: 'Enter' },
-    rename:  { name: 'إعادة تسمية (Rename)', use: 'يفتح محرر العقدة المحددة لتعديل نصها وتنسيقه.', info: 'يتطلب تحديد عقدة. الضغط مرتين على العقدة يفتح نفس المحرر.' },
+    rename:  { name: 'إعادة تسمية (Rename)', use: 'يفتح محرر العقدة المحددة لتعديل نصها وتنسيقه.', info: 'يتطلب تحديد عقدة. الضغط مرتين على العقدة يفتح نفس المحرر.', keys: 'F2' },
     dup:     { name: 'نسخ الفرع (Duplicate)', use: 'ينسخ العقدة المحددة بكل فروعها ويضع النسخة بعدها مباشرة في نفس المستوى.', info: 'يتطلب تحديد عقدة واحدة.' },
     del:     { name: 'حذف (Delete)', use: 'يحذف العنصر المحدد.', info: 'حذف عقدة يحذف معها كل فروعها والعلاقات المرتبطة بها. يمكن التراجع.', keys: 'Delete / Backspace' },
     fold:    { name: 'طيّ / فتح (Collapse / Expand)', use: 'يخفي فروع العقدة المحددة، أو يُظهرها إن كانت مطويّة.', info: 'يعمل مع عقدة لها فروع فقط.' },
@@ -3282,7 +3598,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
     mmN2dir:   { name: 'عكس اتجاه الكتابة (RTL ⇄ LTR)', use: 'بيقلب اتجاه السطر/الفقرة الحالية (أو المحدد) بين يمين→شمال وشمال→يمين.', info: 'مفيد لما تكتب إنجليزي أو معادلات جوه نص عربي. في الكمبيوتر برضه Ctrl+Shift.' },
     mmN2eq:    { name: 'Math Input (رموز رياضية)', use: 'يفتح لوحة رموز رياضية ويدرج الرمز في موضع المؤشر.', info: 'نص Unicode عادي، وليس محرر معادلات. وكتابة x^2 أو a_ij تتحول تلقائيًا إلى x² أو aᵢⱼ.' },
     mmN2eqf:   { name: 'تنسيق معادلة (Equation)', use: 'يحوّل النص المحدد (مثل F_1/A_1=F_2/A_2) إلى معادلة منسّقة: كسور وأرقام سفلية وعلوية.', info: 'حدّد النص أولًا. دبل كليك على المعادلة يرجّعها نصًا قابلًا للتعديل. تظهر بنفس الشكل في تصدير HTML.' },
-    mmN2table: { name: 'جدول (Table)', use: 'يدرج جدولًا من صفين وعمودين في موضع المؤشر.' },
+    mmN2table: { name: 'جدول (Table)', use: 'يدرج جدولًا حرًّا (صفين × عمودين). اسحب الجدول من أي مكان فيه (وهو مش في وضع الكتابة) أو من إطاره، وكبّره من أي ركن. كليك على خلية = كتابة، وEsc للخروج منها. شريط أدوات فوقه وكليك يمين / ضغطة مطوّلة لقايمة كاملة: صفوف وأعمدة، دمج وفصل، ألوان وحدود ومحاذاة، وسحب حدود الأعمدة والصفوف.' },
     mmN2img:   { name: 'صورة (Image)', use: 'يفتح نافذة اختيار صورة من جهازك لإدراجها في الملاحظة.' },
     mmN2box:   { name: 'صندوق محادثة (Chat Box)', use: 'يضيف صندوق نص صغيرًا داخل الملاحظة، ويلتصق بالصورة التي تحته إن وُجدت.' },
     mmN2fdn:   { name: 'تصغير النص (A−)', use: 'يصغّر خط النص المحدد، أو الكتابة التالية إن لم يوجد تحديد.' },
@@ -4122,5 +4438,11 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
 })();
 </script>
 
+<script>
+/* تشغيل أوفلاين: بيشتغل بس لما الصفحة تتفتح من موقع (http/https). كملف محلي مش محتاج حاجة. */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+}
+</script>
 </body>
 </html>

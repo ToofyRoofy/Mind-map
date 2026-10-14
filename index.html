@@ -3,6 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#eceff3">
   <title>أدواتي</title>
   <style>
     :root { color-scheme: light; --ink:#1d2330; --mute:#6b7488; --line:rgba(255,255,255,.9); --glass:rgba(255,255,255,.72); --shadow:0 10px 34px rgba(60,72,98,.14); }
@@ -56,5 +58,11 @@
       document.getElementById('bg').style.backgroundImage = 'url("data:image/svg+xml,' + encodeURIComponent(svg) + '")';
     })();
   </script>
+<script>
+/* تشغيل أوفلاين: بيشتغل بس لما الصفحة تتفتح من موقع (http/https). كملف محلي مش محتاج حاجة. */
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  window.addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+}
+</script>
 </body>
 </html>
