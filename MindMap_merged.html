@@ -1365,6 +1365,7 @@ window.undo = undoAll; window.redo = redoAll;
       '.n .n::after{content:"";position:absolute;inset-inline-start:0;top:var(--elbow);width:var(--arm);border-top:1px solid var(--line)}' +
       '.row{padding-block:.15em}' +
       '.label{unicode-bidi:plaintext;overflow-wrap:anywhere;font-weight:400}h1.label{margin:0;font-size:inherit}.label[dir=rtl],.label[dir=ltr]{unicode-bidi:isolate}.label .mq{margin-block:.35em}.root>.row>.label{font-weight:700}' +
+      '.mks{display:inline;direction:ltr;unicode-bidi:isolate;white-space:nowrap;font-family:"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif;font-weight:400;font-style:normal}.mk+.mk{margin-inline-start:.15em}' +
       '.imgs img{display:block;max-width:100%;height:auto;margin-block:.45em .3em}.top{display:flex;flex-wrap:wrap;align-items:flex-start;gap:.3em .8em}.top .imgs{display:flex;flex-wrap:wrap;gap:.4em;max-width:60%}.top .imgs img{margin:.2em 0}.top>.label{flex:0 1 auto;min-width:0}' +
       '.rels{margin-block:.1em;font-size:.88em;line-height:1.6;color:var(--rel)}.rel{display:block;overflow-wrap:anywhere}.rd{display:inline-block;min-width:1.3em;text-align:center;font-weight:700}.rel a{color:inherit;text-decoration:none;border-bottom:1px dotted currentColor}.rl{opacity:.85}.rs{display:inline-block;min-width:1.5em;margin-inline-end:.35em;padding:0 .4em;border:1.5px solid currentColor;border-radius:1em;font-size:.85em;font-weight:700;text-align:center;line-height:1.35}.n{scroll-margin-top:12px}.n:target>.row{background:#fff8dc}.n>.lk{position:absolute;z-index:1;top:0;direction:inherit;min-width:1.7em;padding:0 .45em;border:1.5px solid #1a73e8;border-radius:1em;background:#fff;color:#1a73e8;font-size:.8em;font-weight:700;line-height:1.5;text-align:center;white-space:nowrap}html[dir=rtl] .n>.lk{right:0;left:auto;transform:translate(50%,-50%)}html[dir=ltr] .n>.lk{left:0;right:auto;transform:translate(-50%,-50%)}' +
       '.note{margin-block:.1em .2em;padding-block:.15em;padding-inline:.7em 0;border-inline-start:2px solid var(--noteline);font-size:.92em;line-height:1.65;color:var(--muted);overflow-wrap:anywhere}' +
@@ -1450,7 +1451,10 @@ window.undo = undoAll; window.redo = redoAll;
     }
     /* عنوان الـHTML Export: نفس exportTitleText بس المعادلات بتتحط كـMathML (placeholder ثم استبدال بعد الـesc) */
     function exportTitleHtml(n) { const stash = [], t = exportTitleText(n, stash); const EQL = /^\s*(\uE000\d+\uE001\s*)+$/, ls = t.split('\n'); let h = ls.map((x, i) => (i ? (EQL.test(ls[i - 1]) || EQL.test(x) ? ' ' : '<br>') : '') + esc(x)).join(''); /* سطر معادلة لوحده بيتحط جنب سطر النص اللي جنبه (مش فوقه) عشان يبان إنها جزء من نفس الـNode */ if (stash.length && window.MMEq) h = h.replace(/\uE000(\d+)\uE001/g, (m, i) => '<span class="mq">' + window.MMEq.mathml(stash[+i]) + '</span>'); return h; }
-    const mkExportEntry = n => ({ id: n.id, plain: exportTitleText(n), title: exportTitleHtml(n), imgs: (n.data.images || []).filter(i => !(i && i.eq)).map(exportImgHtml).join(''), eqs: (n.data.images || []).filter(i => i && i.eq).map(exportEqHtml).join(''), noteHtml: renderExportNote(n), children: [], rels: [], seq: 0, nl: !/\p{L}/u.test(exportTitleText(n, [])), lk: String((n.data.linkStyle || {}).label || '').trim() });
+    /* علامات الـNode (تاب «علامة» → data.markers) بتتكتب في الـHTML Tree قبل العنوان مباشرةً (كلها، مش أول 4 زي الكانفاس).
+       whitelist بمفاتيح icons بس (أي key غريب/قديم بيتتجاهل) والإيموجي من الـicons الثابتة — مفيش تأثير على plain/العلاقات/الـtitle/النموذج. */
+    function exportMarkersHtml(n) { const m = n && n.data && n.data.markers; if (!Array.isArray(m)) return ''; const h = m.filter(k => typeof k === 'string' && Object.prototype.hasOwnProperty.call(icons, k)).map(k => '<span class="mk" data-marker="' + k + '">' + icons[k] + '</span>').join(''); return h ? '<span class="mks">' + h + '</span> ' : ''; }
+    const mkExportEntry = n => ({ id: n.id, plain: exportTitleText(n), title: exportTitleHtml(n), mks: exportMarkersHtml(n), imgs: (n.data.images || []).filter(i => !(i && i.eq)).map(exportImgHtml).join(''), eqs: (n.data.images || []).filter(i => i && i.eq).map(exportEqHtml).join(''), noteHtml: renderExportNote(n), children: [], rels: [], seq: 0, nl: !/\p{L}/u.test(exportTitleText(n, [])), lk: String((n.data.linkStyle || {}).label || '').trim() });
     /* Traversal بـstack صريح (من غير recursion). Phase 1: من الـRoots الحقيقية. Phase 2: أي عقدة فاضلة (حلقة parent) بتبقى Root إضافي بالترتيب. */
     function buildExportTree(rs) {
       const cache = buildExportChildMap(rs.all), seen = new Set(), out = { roots: [], count: 0, cycles: 0, byId: new Map() };
@@ -1477,7 +1481,7 @@ window.undo = undoAll; window.redo = redoAll;
         return '<span class="rel">' + (stp ? '<span class="rs"><bdi>' + esc(r.label) + '</bdi></span>' : '') + '<span class="rd">' + sym + '</span> <a href="#n' + r.other.seq + '"><bdi>' + esc(t) + '</bdi></a>' + (r.label && !stp ? ' <span class="rl">(<bdi>' + esc(r.label) + '</bdi>)</span>' : '') + '</span>'; }).join('') + '</div>';
     }
     function renderExportNode(e, d, last, first, dir) {
-      return '<div role="treeitem" id="n' + e.seq + '" class="n' + (d === 0 ? ' root' : '') + (last ? ' last' : '') + '" data-depth="' + d + '" data-last="' + (last ? 1 : 0) + '">' + (d > 0 && e.lk ? '<span class="lk"><bdi>' + esc(e.lk) + '</bdi></span>' : '') + '<div class="row">' + (() => { const lab = first ? '<h1 class="label" dir="' + dir + '">' + e.title + '</h1>' : '<span class="label" dir="' + (e.nl ? dir : 'auto') + '">' + e.title + '</span>', im = e.imgs ? '<div class="imgs">' + e.imgs + '</div>' : ''; /* صور الـNode جنب العنوان على يمينه (RTL: الصور الأول) */ return im ? '<div class="top">' + (dir === 'rtl' ? im + lab : lab + im) + '</div>' : lab; })() + (e.eqs || '') + renderExportRels(e, dir) + e.noteHtml + '</div>' + (e.children.length ? '<div class="kids" role="group">' : '');
+      return '<div role="treeitem" id="n' + e.seq + '" class="n' + (d === 0 ? ' root' : '') + (last ? ' last' : '') + '" data-depth="' + d + '" data-last="' + (last ? 1 : 0) + '">' + (d > 0 && e.lk ? '<span class="lk"><bdi>' + esc(e.lk) + '</bdi></span>' : '') + '<div class="row">' + (() => { const tt = (e.mks || '') + e.title, lab = first ? '<h1 class="label" dir="' + dir + '">' + tt + '</h1>' : '<span class="label" dir="' + (e.nl ? dir : 'auto') + '">' + tt + '</span>', im =e.imgs ? '<div class="imgs">' + e.imgs + '</div>' : ''; /* صور الـNode جنب العنوان على يمينه (RTL: الصور الأول) */ return im ? '<div class="top">' + (dir === 'rtl' ? im + lab : lab + im) + '</div>' : lab; })() + (e.eqs || '') + renderExportRels(e, dir) + e.noteHtml + '</div>' + (e.children.length ? '<div class="kids" role="group">' : '');
     }
     function buildExportHtml(tree, meta) {
       const empty = !tree.roots.length, first = empty ? '' : tree.roots[0].plain;
@@ -1703,7 +1707,7 @@ window.undo = undoAll; window.redo = redoAll;
       const allow = { B: 1, STRONG: 1, I: 1, EM: 1, U: 1, BR: 1, DIV: 1, P: 1, UL: 1, OL: 1, LI: 1, H1: 1, H2: 1, H3: 1, SPAN: 1, A: 1, IMG: 1, TABLE: 1, COLGROUP: 1, COL: 1, THEAD: 1, TBODY: 1, TFOOT: 1, TR: 1, TH: 1, TD: 1, SUB: 1, SUP: 1, FONT: 1 };
       const cleanNode = n => [...n.childNodes].forEach(c => { if (c.nodeType === 3) return; if (c.nodeType !== 1) { c.remove(); return; } if (c.tagName === 'SPAN' && c.hasAttribute('data-mmeq') && window.MMEq && window.MMEq.fill(c, c.getAttribute('data-mmeq'))) return; if (!allow[c.tagName]) { cleanNode(c); while (c.firstChild) n.insertBefore(c.firstChild, c); c.remove(); return; }
         [...c.attributes].forEach(a => { const name = a.name.toLowerCase(), v = a.value || '';
-          if (name === 'dir' && /^(rtl|ltr|auto)$/i.test(v)) return; if ((name === 'colspan' || name === 'rowspan') && /^(TD|TH)$/.test(c.tagName) && /^([1-9]|[1-4]\d|50)$/.test(v)) return; /* دمج الخلايا */ if (name === 'href') { if (!/^(https?:|mailto:|#)/i.test(v)) c.removeAttribute(a.name); return; }
+          if (name === 'dir' && /^(rtl|ltr|auto)$/i.test(v)) return; if (name === 'start' && c.tagName === 'OL' && /^[1-9]\d{0,3}$/.test(v)) return; /* ترقيم القايمة بعد سطر فاضي */ if ((name === 'colspan' || name === 'rowspan') && /^(TD|TH)$/.test(c.tagName) && /^([1-9]|[1-4]\d|50)$/.test(v)) return; /* دمج الخلايا */ if (name === 'href') { if (!/^(https?:|mailto:|#)/i.test(v)) c.removeAttribute(a.name); return; }
           if (name === 'src') { if (!/^(data:image\/(png|jpeg|jpg|gif|webp);base64,|https?:)/i.test(v)) c.removeAttribute(a.name); return; } if (name === 'alt' || name === 'title') return;
           if (name === 'data-locked') { if (v === '1') return; c.removeAttribute(a.name); return; } /* ADD: Image Lock — نفس بيانات الصورة الحالية، بدون object/State منفصلة */
           if (name === 'style') { const bad = /url\s*\(|expression|javascript|@import|[<>{}]/i, propOk = /^\s*(color|background-color|font-family|font-size|font-weight|font-style|text-decoration|text-align|direction|line-height|vertical-align|border(?:-(?:top|right|bottom|left))?(?:-(?:color|width|style))?|padding|width|height|max-width|position|top|left|float|margin|margin-top|margin-left|margin-right|margin-bottom|display)\s*:/i;
@@ -2079,7 +2083,7 @@ window.undo = undoAll; window.redo = redoAll;
     document.addEventListener('pointerdown', e => { if (!(e.target.closest && e.target.closest('.mmBar,.mmPop'))) ptrDown = true; }, true);
     ['pointerup', 'pointercancel'].forEach(n => document.addEventListener(n, () => { ptrDown = false; if (note2Edit) tbarSync(); }, true));
     document.addEventListener('selectionchange', () => { if (!note2Edit) return; const s = getSelection(); if (s && s.rangeCount && inEditable(s.anchorNode) && inEditable(s.focusNode)) { const r = s.getRangeAt(0), root = fsRoot(r.startContainer); if (root) txtLast = { range: r.cloneRange(), root }; } txtDirty = true; if (s && !s.isCollapsed) tbarSync(); });
-    function makeNote2() { if (note2) return; note2 = $('div', { id: 'mmNoteModal2' }); note2.innerHTML = '<div class="mmNoteCard2"><div class="mmNoteHeader2"><strong id="mmN2title">Rich Note</strong><button id="mmN2close">✕</button></div><div class="mmN2tools"><button data-c="bold"><b>B</b></button><button data-c="italic"><i>I</i></button><button data-c="underline"><u>U</u></button><button id="mmN2font" title="إعدادات الخط" aria-label="Font settings" aria-haspopup="dialog">Aa</button><button data-c="insertUnorderedList">•</button><button data-c="insertOrderedList">1.</button><button id="mmN2link">🔗</button><button id="mmN2eq" title="Math Input" aria-label="Math Input" aria-haspopup="dialog" aria-expanded="false">∑</button><button id="mmN2eqf" title="إضافة معادلة (Alt+Shift+E)" aria-label="Format selection as equation">a⁄b</button><button id="mmN2table">▦</button><button id="mmN2img">🖼</button><button id="mmN2box" title="Chat Box">💬</button><button id="mmN2fdn" title="تصغير النص">A−</button><button id="mmN2fup" title="تكبير النص">A+</button><button id="mmN2dir" title="عكس اتجاه الكتابة (RTL ⇄ LTR)" aria-label="Toggle text direction">⇄</button><button id="mmN2exp" title="تكبير مساحة الكتابة">⛶</button><button id="mmN2mz" title="تحريك / تكبير (Move / Zoom)">✥ تحريك</button></div><div id="mmN2wrap"><div id="mmN2content"><div id="mmN2imgs"></div><div id="mmN2boxes"></div><div id="mmN2edit" contenteditable="true"></div></div></div><div class="mmN2zbar"><button id="mmN2zout" title="Zoom Out">&minus;</button><span id="mmN2zpct">100%</span><input type="range" id="mmN2zrng" min="25" max="400" step="5" value="100" title="Zoom: 100%"><button id="mmN2zin" title="Zoom In">+</button></div><div class="mmN2foot"><button id="mmN2save">حفظ</button></div></div>'; document.body.appendChild(note2);
+    function makeNote2() { if (note2) return; note2 = $('div', { id: 'mmNoteModal2' }); note2.innerHTML = '<div class="mmNoteCard2"><div class="mmNoteHeader2"><strong id="mmN2title">Rich Note</strong><button id="mmN2close">✕</button></div><div class="mmN2tools"><button data-c="bold"><b>B</b></button><button data-c="italic"><i>I</i></button><button data-c="underline"><u>U</u></button><button id="mmN2font" title="إعدادات الخط" aria-label="Font settings" aria-haspopup="dialog">Aa</button><button data-c="insertUnorderedList">•</button><button data-c="insertOrderedList">1.</button><button id="mmN2link">🔗</button><button id="mmN2eq" title="Math Input" aria-label="Math Input" aria-haspopup="dialog" aria-expanded="false">∑</button><button id="mmN2eqf" title="إضافة معادلة (Alt+Shift+E)" aria-label="Format selection as equation">a⁄b</button><button id="mmN2table">▦</button><button id="mmN2img">🖼</button><button id="mmN2box" title="Chat Box">💬</button><button id="mmN2fdn" title="تصغير النص">A−</button><button id="mmN2fup" title="تكبير النص">A+</button><button id="mmN2dir" title="عكس اتجاه الكتابة (RTL ⇄ LTR)" aria-label="Toggle text direction">⇄</button><button id="mmN2mk" title="علامة (Type) للسطر" aria-label="Line marker" aria-haspopup="dialog" aria-expanded="false">☺</button><button id="mmN2exp" title="تكبير مساحة الكتابة">⛶</button><button id="mmN2mz" title="تحريك / تكبير (Move / Zoom)">✥ تحريك</button></div><div id="mmN2wrap"><div id="mmN2content"><div id="mmN2imgs"></div><div id="mmN2boxes"></div><div id="mmN2edit" contenteditable="true"></div></div></div><div class="mmN2zbar"><button id="mmN2zout" title="Zoom Out">&minus;</button><span id="mmN2zpct">100%</span><input type="range" id="mmN2zrng" min="25" max="400" step="5" value="100" title="Zoom: 100%"><button id="mmN2zin" title="Zoom In">+</button></div><div class="mmN2foot"><button id="mmN2save">حفظ</button></div></div>'; document.body.appendChild(note2);
       note2Edit = note2.querySelector('#mmN2edit'); note2Wrap = note2.querySelector('#mmN2wrap'); note2Layer = note2.querySelector('#mmN2imgs'); note2Boxes = note2.querySelector('#mmN2boxes'); note2Content = note2.querySelector('#mmN2content');
       mzBtn = note2.querySelector('#mmN2mz'); mzBtn.onclick = () => mzToggle();
       mzUI = { zout: note2.querySelector('#mmN2zout'), zin: note2.querySelector('#mmN2zin'), pct: note2.querySelector('#mmN2zpct'), rng: note2.querySelector('#mmN2zrng') };
@@ -2091,7 +2095,44 @@ window.undo = undoAll; window.redo = redoAll;
         if (e.key === '+' || e.key === '=') { e.preventDefault(); e.stopPropagation(); mzStep(1); }
         else if (e.key === '-' || e.key === '_') { e.preventDefault(); e.stopPropagation(); mzStep(-1); }
         else if (e.key === '0') { e.preventDefault(); e.stopPropagation(); mzZoomCentered(1); } }, true); /* ADD: Move/Zoom — زر واحد بس، Reuse كامل لباقي الـarchitecture */
-      note2.querySelector('#mmN2box').onclick = () => { const cw = note2Wrap.clientWidth || 600, w = Math.min(240, cw * 0.6), b = addBox({ x: Math.max(0, (note2Wrap.scrollLeft + cw / 2) / (mzZoom || 1) - w / 2), y: note2Wrap.scrollTop / (mzZoom || 1) + 40, w, h: 90 }); selectBox(b); b.querySelector('.mmBoxBody').focus(); }; note2.querySelectorAll('[data-c]').forEach(b => b.onclick = () => document.execCommand(b.dataset.c, false, null));
+      note2.querySelector('#mmN2box').onclick = () => { const cw = note2Wrap.clientWidth || 600, w = Math.min(240, cw * 0.6), b = addBox({ x: Math.max(0, (note2Wrap.scrollLeft + cw / 2) / (mzZoom || 1) - w / 2), y: note2Wrap.scrollTop / (mzZoom || 1) + 40, w, h: 90 }); selectBox(b); b.querySelector('.mmBoxBody').focus(); }; note2.querySelectorAll('[data-c]').forEach(b => { b.addEventListener('mousedown', e => e.preventDefault()); /* الفوكس يفضل في المحرر: وإلا Enter/المسافة بعد الضغط كانت بتروح للزرار نفسه وتعمل كليك تاني */ b.onclick = () => document.execCommand(b.dataset.c, false, null); });
+      /* ===== القوائم (• / 1.) في Rich Note =====
+         Enter على عنصر فاضي: بدل ما يخرّج من القايمة، العنصر الفاضي بيتحوّل لسطر فاضي عادي قابل للكتابة (من غير رقم/نقطة)، والعنصر الجديد تحته بياخد نفس الرقم.
+         التنفيذ بـ execCommand (Undo أصلي)، والترقيم بيكمّل بـ start على الـ<ol> (مسموح في safeNoteHtml). الخروج من القايمة = ضغطة الزرار تاني على السطر. */
+      (function () {
+        let busy = false;
+        const GHOST = /[\u200b-\u200d\u2060\ufeff\s\u00a0]/g, isHost = t => !!(t && (t === note2Edit || (t.closest && t.closest('.mmBoxBody'))));
+        const elOf = n => n && (n.nodeType === 1 ? n : n.parentElement);
+        const liAt = () => { const s = getSelection(); if (!s.rangeCount || !s.isCollapsed) return null; const e = elOf(s.anchorNode); return e && e.closest ? e.closest('li') : null; };
+        function probe() { /* الكيرسور في عنصر قايمة فاضي (مش متداخل) جوه Rich Note؟ */
+          const li = liAt(); if (!li || !note2.contains(li)) return null;
+          const list = li.parentElement; if (!list || !/^(OL|UL)$/.test(list.tagName) || (list.parentElement && list.parentElement.closest('li'))) return null;
+          if (li.querySelector('img,table,ul,ol,[data-mmeq],.mmN2eq') || li.querySelectorAll('br').length > 1 || li.textContent.replace(GHOST, '')) return null;
+          const root = li.closest('.mmBoxBody') || (note2Edit.contains(li) ? note2Edit : null); if (!root) return null;
+          const st = parseInt(list.getAttribute('start'), 10) || 1;
+          return { li, list, root, ol: list.tagName === 'OL', num: st + [...list.children].filter(c => c.tagName === 'LI').indexOf(li), dir: li.getAttribute('dir') };
+        }
+        function run() {
+          if (busy) return false; const p = probe(); if (!p) return false; busy = true;
+          try {
+            const ex = c => document.execCommand(c, false, null);
+            ex('insertParagraph');                                   /* العنصر الفاضي يخرج من القايمة = سطر فاضي عادي */
+            if (liAt()) return true;                                 /* المتصفح ماخرّجش من القايمة: سيبه على سلوكه */
+            ex('insertParagraph');                                   /* سطر جديد تحت السطر الفاضي */
+            ex(p.ol ? 'insertOrderedList' : 'insertUnorderedList');  /* بيتحوّل لعنصر قايمة (أو بيندمج مع باقي القايمة لو كان في النص) */
+            const li2 = liAt(), l2 = li2 && li2.parentElement;
+            if (l2 && /^(OL|UL)$/.test(l2.tagName)) {
+              if (p.ol && l2.tagName === 'OL') { if (p.num > 1) l2.setAttribute('start', String(p.num)); else l2.removeAttribute('start'); } /* الرقم يكمّل من مكانه */
+              l2.style.marginTop = '0'; if (p.list.isConnected && p.list !== l2) p.list.style.marginBottom = '0'; /* السطر الفاضي = سطر واحد بالظبط (من غير هوامش القايمة الزيادة) */
+              if (p.dir) li2.setAttribute('dir', p.dir);
+            }
+            p.root.dispatchEvent(new Event('input', { bubbles: true }));
+          } finally { busy = false; }
+          return true;
+        }
+        note2.addEventListener('keydown', e => { if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey || e.isComposing || e.keyCode === 229 || !isHost(e.target)) return; if (run()) e.preventDefault(); }, true);
+        note2.addEventListener('beforeinput', e => { if (e.inputType !== 'insertParagraph' || !e.cancelable || busy || !isHost(e.target) || !probe()) return; e.preventDefault(); setTimeout(run, 0); }, true); /* موبايل/IME: الـkeydown مش دايمًا بيجيب Enter */
+      })();
       { const fb = note2.querySelector('#mmN2font'); fb.addEventListener('mousedown', e => e.preventDefault()); fb.onclick = () => txtPanelToggle(fb); } /* إعدادات الخط */
       [['#mmN2fdn', -1], ['#mmN2fup', 1]].forEach(([q, d]) => { const bt = note2.querySelector(q); bt.addEventListener('mousedown', e => e.preventDefault()); bt.onclick = () => stepFont(d); }); /* mousedown preventDefault: الـSelection ما تضيعش */
       note2Wrap.addEventListener('input', () => { if (fsPending != null && applyFontMarkers(0, fsPending)) fsPending = null; }); note2Wrap.addEventListener('pointerdown', () => { fsPending = null; }, true);
@@ -2141,6 +2182,66 @@ window.undo = undoAll; window.redo = redoAll;
           bt.title = 'عكس اتجاه السطر الحالي (RTL ⇄ LTR) — آخر اتجاه: ' + next.toUpperCase();
           root.dispatchEvent(new Event('input', { bubbles: true }));
         };
+      })();
+      /* ===== علامة (Type) للسطر في Rich Note =====
+         زرار ☺ بيفتح نفس الـ12 علامة (icons)، والاختيار بيحط الإيموجي في أول السطر/الأسطر المحددة كنص عادي
+         (بيعدّي على safeNoteHtml وبيظهر في الـHTML Tree/الـExport من غير أي تعديل هناك). نفس العلامة تاني = بتتشال، علامة تانية = بتتبدّل، ✕ = إزالة.
+         التنفيذ بـexecCommand (insertText/delete) = خطوات Undo أصلية للمتصفح، ومفيش تعديل DOM يدوي. بيشتغل في نص الملاحظة وجوه الـChat Box. */
+      (function () {
+        const bt = note2.querySelector('#mmN2mk'); bt.addEventListener('mousedown', e => e.preventDefault()); /* الكيرسور/التحديد يفضلوا في المحرر */
+        const NAMES = { important: 'مهم', question: 'سؤال', warning: 'تحذير', done: 'تم', star: 'نجمة', idea: 'فكرة', priority: 'أولوية', happy: 'سعيد', sad: 'حزين', error: 'خطأ', start: 'بداية', end: 'نهاية' };
+        const base = s => String(s).replace(/️/g, ''), keys = Object.keys(icons), keyOfEmoji = s => keys.find(k => base(icons[k]) === base(s)) || null;
+        const MKRE = new RegExp('^(' + keys.map(k => base(icons[k]) + '\\uFE0F?').join('|') + ')([ \\u00a0])?'); /* علامة في أول النص + مسافة بعدها (لو موجودة) */
+        const BLK = 'div,p,li,h1,h2,h3,h4,h5,h6,blockquote,td,th,pre', STR = 'ul,ol,table,thead,tbody,tfoot,tr', DESC = 'b,strong,i,em,u,sub,sup,font,span:not([data-mmeq]):not(.mq)';
+        const blank = n => n.nodeType === 3 && !n.nodeValue.trim(), idxOf = (C, n) => Array.prototype.indexOf.call(C.childNodes, n);
+        /* "السطر" = كل بلوك فيه سطر واحد، وكل أسطر متفصلة بـ<br> جوه نفس البلوك = أسطر منفصلة (نفس تعريف زرار عكس الاتجاه) */
+        const lines = root => { const out = [];
+          (function walk(C) { let run = []; const flush = br => { if (br || run.some(n => !blank(n))) out.push({ C, nodes: run, br }); run = []; };
+            [...C.childNodes].forEach(ch => { if (ch.nodeName === 'BR') flush(ch); else if (ch.nodeType === 1 && ch.matches(BLK + ',' + STR)) { flush(null); walk(ch); } else run.push(ch); });
+            flush(null); })(root);
+          return out; };
+        const firstText = nodes => { for (const n of nodes) { if (n.nodeType === 3) { if (blank(n)) continue; return n; } if (n.nodeType !== 1) continue; if (!n.matches(DESC)) return null; const t = firstText([...n.childNodes]); if (t) return t; } return null; };
+        const info = L => { const t = firstText(L.nodes), m = t && MKRE.exec(t.nodeValue); return { t, m, key: m ? keyOfEmoji(m[1]) : null }; };
+        const strPt = L => [L.C, idxOf(L.C, L.nodes[0] || L.br)], endPt = L => [L.C, L.br ? idxOf(L.C, L.br) : L.C.childNodes.length];
+        const P = (n, o) => { const r = document.createRange(); r.setStart(n, o); r.collapse(true); return r; }, cmp = (a, b) => a.compareBoundaryPoints(Range.START_TO_START, b);
+        function target(root, range) { const ls = lines(root); if (!ls.length) return [];
+          const rs = P(range.startContainer, range.startOffset), re = P(range.endContainer, range.endOffset), sp = ls.map(L => { const s = strPt(L), e = endPt(L); return [P(s[0], s[1]), P(e[0], e[1])]; });
+          let hits = ls.filter((L, i) => { const [s, e] = sp[i]; if (range.collapsed) return cmp(rs, s) >= 0 && cmp(rs, e) <= 0;
+            return cmp(s, e) === 0 ? cmp(rs, s) <= 0 && cmp(re, s) > 0 : cmp(rs, e) < 0 && cmp(re, s) > 0; }); /* مجرد لمس حدّ السطر مايحسبش */
+          if (!hits.length) { let k = 0; ls.forEach((L, i) => { if (cmp(sp[i][0], rs) <= 0) k = i; }); hits = [ls[k]]; } /* الكيرسور بين بلوكين → أقرب سطر قبله */
+          return hits; }
+        function edRange() { const sel = getSelection(); if (!sel.rangeCount) return null; const root = fsRoot(sel.anchorNode); if (!root) return null;
+          const range = sel.getRangeAt(0).cloneRange(); if (!(root.contains(range.startContainer) && root.contains(range.endContainer))) range.collapse(true); return { sel, root, range }; }
+        function apply(k) { /* k = مفتاح العلامة، أو null = إزالة */
+          if (!txtRestore()) { note2Edit.focus(); const r0 = document.createRange(); r0.selectNodeContents(note2Edit); r0.collapse(false); const s0 = getSelection(); s0.removeAllRanges(); s0.addRange(r0); } /* مفيش كيرسور → آخر الملاحظة */
+          const cx = edRange(); if (!cx) return; const { sel, root, range } = cx, keep = range.cloneRange(), e = k ? icons[k] : null;
+          const ex = (c, v) => document.execCommand(c, false, v), setSel = (n, a, b) => { const r = document.createRange(); r.setStart(n, a); r.setEnd(n, b); sel.removeAllRanges(); sel.addRange(r); };
+          let ls = target(root, range).map(L => Object.assign({ L }, info(L))), ins = false;
+          if (!ls.length) { if (!k) return; root.focus(); sel.removeAllRanges(); sel.addRange(P(root, 0)); ex('insertText', e + ' '); return; } /* ملاحظة فاضية */
+          const all = !!k && ls.every(x => x.key === k), caretStart = keep.collapsed && ls.length === 1 && (() => { const f = ls[0], s = f.t ? [f.t, 0] : strPt(f.L); return cmp(P(keep.startContainer, keep.startOffset), P(s[0], s[1])) <= 0; })();
+          for (let i = ls.length - 1; i >= 0; i--) { const x = ls[i], f = info(x.L); /* من الآخر للأول عشان مواضع الأسطر اللي قبلها تفضل صح */
+            if (!k || all) { if (f.m) { const nx = f.t.nextSibling, hold = !!f.m[2] && f.t.nodeValue.length === f.m[0].length && !!nx && nx.nodeType === 1 && nx.getAttribute('contenteditable') === 'false'; /* النص هيفضى قدّام معادلة مش قابلة للتحرير → المتصفح بيزوّد <br> وبيفك الـdiv؛ فنشيل الإيموجي بس ونسيب المسافة */
+                setSel(f.t, 0, hold ? f.m[1].length : f.m[0].length); ex('delete'); } }
+            else if (f.key === k) { /* موجودة بالفعل */ }
+            else if (f.m) { setSel(f.t, 0, f.m[1].length); ex('insertText', e); }
+            else { const s = f.t ? [f.t, 0] : strPt(x.L); const r = P(s[0], s[1]); sel.removeAllRanges(); sel.addRange(r); ex('insertText', e + ' '); ins = true; } }
+          if (!(ins && caretStart)) { sel.removeAllRanges(); sel.addRange(keep); } /* الكيرسور/التحديد يفضلوا مكانهم — إلا لو الكيرسور كان في أول السطر فيتحط بعد العلامة الجديدة */
+        }
+        let pop = null;
+        const onDown = e => { if (pop && !pop.contains(e.target) && !bt.contains(e.target)) closePop(); }, onKey = e => { if (e.key === 'Escape') { e.stopPropagation(); closePop(); } };
+        function closePop() { if (!pop) return; pop.remove(); pop = null; bt.setAttribute('aria-expanded', 'false'); document.removeEventListener('pointerdown', onDown, true); document.removeEventListener('keydown', onKey, true); }
+        function openPop() { closePop(); let cur = null; /* العلامة الحالية للسطر (لو كل الأسطر المحددة نفس العلامة) عشان تتميّز في المنتقي */
+          const s = getSelection(), rg = s.rangeCount && inEditable(s.anchorNode) ? s.getRangeAt(0) : (txtLast && txtLast.root.isConnected ? txtLast.range : null), rt = rg && fsRoot(rg.startContainer);
+          if (rt && rt.contains(rg.endContainer)) { const ks = target(rt, rg).map(L => info(L).key); if (ks.length && ks.every(x => x && x === ks[0])) cur = ks[0]; }
+          const p = $('div', { id: 'mmN2mkPop' }); p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'علامة للسطر');
+          p.style.cssText = 'position:fixed;z-index:2300;background:#fff;border:1px solid #aaa;border-radius:8px;padding:7px;display:grid;grid-template-columns:repeat(6,36px);gap:4px;box-shadow:0 6px 20px #0004;visibility:hidden';
+          keys.forEach(k => { const b = $('button', { type: 'button', textContent: icons[k], title: NAMES[k] || k }); b.setAttribute('aria-label', NAMES[k] || k); if (k === cur) b.style.outline = '2px solid #2563eb'; b.onclick = () => { closePop(); apply(k); }; p.appendChild(b); });
+          const x = $('button', { type: 'button', textContent: '✕ إزالة العلامة', title: 'إزالة العلامة من السطر/الأسطر المحددة' }); x.style.cssText = 'grid-column:1/-1;font-size:12px'; x.onclick = () => { closePop(); apply(null); }; p.appendChild(x);
+          p.addEventListener('mousedown', e => e.preventDefault()); document.body.appendChild(p); pop = p; bt.setAttribute('aria-expanded', 'true');
+          const r = bt.getBoundingClientRect(), w = p.offsetWidth, h = p.offsetHeight; let top = r.bottom + 6; if (top + h > innerHeight - 6) top = Math.max(6, r.top - h - 6);
+          p.style.left = Math.max(6, Math.min(innerWidth - w - 6, r.left + r.width / 2 - w / 2)) + 'px'; p.style.top = top + 'px'; p.style.visibility = '';
+          document.addEventListener('pointerdown', onDown, true); document.addEventListener('keydown', onKey, true); }
+        bt.onclick = () => { if (pop) closePop(); else openPop(); };
       })();
       note2.querySelector('#mmN2eq').onclick = () => { if (window.MMMath) window.MMMath.toggle(); };
       note2.querySelector('#mmN2eqf').onmousedown = e2 => e2.preventDefault(); /* الزرار ما يسحبش الـSelection */
@@ -3739,9 +3840,10 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
     'adv:clearWaypoints': { name: 'مسح نقاط الانعطاف (Clear Waypoints)', use: 'يزيل كل نقاط التحكم ويعيد الخط لمساره الأصلي.' },
 
     /* ----- Rich Note Toolbar (data-c / id) ----- */
-    'c:bold': FMT.bold, 'c:italic': FMT.italic, 'c:underline': FMT.underline, 'c:insertUnorderedList': FMT.ul, 'c:insertOrderedList': FMT.ol,
+    'c:bold': FMT.bold, 'c:italic': FMT.italic, 'c:underline': FMT.underline, 'c:insertUnorderedList': Object.assign({}, FMT.ul, { info: 'Enter على سطر فاضي بيعمل سطر فاضي عادي (من غير نقطة) والنقطة بتنزل للسطر اللي بعده. للخروج من القايمة اضغط الزرار تاني على السطر.' }), 'c:insertOrderedList': Object.assign({}, FMT.ol, { info: 'Enter على سطر فاضي بيعمل سطر فاضي بدون رقم، والرقم بينتقل للسطر اللي بعده. للخروج من القايمة اضغط الزرار تاني على السطر.' }),
     mmN2link:  { name: 'رابط (Link)', use: 'يحوّل النص المحدد إلى رابط بعد إدخال العنوان.', info: 'يُقبل فقط http أو https أو mailto.' },
     mmN2font:  { name: 'إعدادات الخط (Aa)', use: 'لوحة كاملة: نوع الخط، الحجم بالبكسل، عريض/مائل/تسطير، لون الخط والتمييز، المحاذاة والقوائم ومسح التنسيق.', info: 'لما تحدد نص بيظهر شريط سريع فوقه (وعلى الموبايل بيلزق تحت فوق الكيبورد).' },
+    mmN2mk:    { name: 'علامة للسطر (Type)', use: 'يفتح منتقي العلامات ويضيف العلامة المختارة في أول السطر الحالي (أو كل الأسطر المحددة).', info: 'العلامة نص إيموجي عادي بيظهر في الـHTML Tree. نفس العلامة تاني بتشيلها، وعلامة مختلفة بتبدّلها، و«✕ إزالة العلامة» بتشيلها.' },
     mmN2dir:   { name: 'عكس اتجاه الكتابة (RTL ⇄ LTR)', use: 'بيقلب اتجاه السطر/الفقرة الحالية (أو المحدد) بين يمين→شمال وشمال→يمين.', info: 'مفيد لما تكتب إنجليزي أو معادلات جوه نص عربي. في الكمبيوتر برضه Ctrl+Shift.' },
     mmN2eq:    { name: 'Math Input (رموز رياضية)', use: 'يفتح لوحة رموز رياضية ويدرج الرمز في موضع المؤشر.', info: 'نص Unicode عادي، وليس محرر معادلات. وكتابة x^2 أو a_ij تتحول تلقائيًا إلى x² أو aᵢⱼ.' },
     mmN2eqf:   { name: 'تنسيق معادلة (Equation)', use: 'يحوّل النص المحدد (مثل F_1/A_1=F_2/A_2) إلى معادلة منسّقة: كسور وأرقام سفلية وعلوية.', info: 'حدّد النص أولًا. دبل كليك على المعادلة يرجّعها نصًا قابلًا للتعديل. تظهر بنفس الشكل في تصدير HTML.' },
