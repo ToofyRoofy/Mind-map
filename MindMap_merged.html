@@ -4695,7 +4695,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
  * ===================================================================== */
 (function () {
   'use strict';
-  var BUILD = '2026-10-19.1'; window.MM_BUILD = BUILD;
+  var BUILD = '2026-10-19.2'; window.MM_BUILD = BUILD;
   if (!/(^|[?&#])diag(=1|=true)?($|[&#])/.test(location.search + location.hash)) return;
   var FILES = ['index.html', 'MindMap_merged.html', 'paint-EKTS-workspace.html', 'sw.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-maskable-512.png', 'apple-touch-icon.png'];
   var el = function (t, p, h) { var e = document.createElement(t); if (p) Object.assign(e, p); if (h != null) e.innerHTML = h; return e; };
@@ -4775,7 +4775,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
    التنزيل على أي جهاز من غير توكن (بكلمة السر بس). الرفع محتاج توكن مرة واحدة على الجهاز اللي هيرفع. */
 (function () {
   'use strict';
-  var P = 'mmsync_', DIR = 'mm-sync', NAME = /^(.+)\.(\d{10,})\.enc$/, E = new TextEncoder(), D = new TextDecoder(), busy = false, btn;
+  var P = 'mmsync_', DIR = 'mm-sync', NAME = /^(.+)\.(\d{10,})\.enc$/, E = new TextEncoder(), D = new TextDecoder(), busy = false, btn, msgEl;
   var $ = function (k, v) { try { if (v === undefined) return localStorage.getItem(P + k); if (v === null) localStorage.removeItem(P + k); else localStorage.setItem(P + k, v); } catch (e) { } return null; };
   var reset = function () { if (btn) btn.textContent = '🔄 مزامنة'; };
   function repo() {
@@ -4806,10 +4806,13 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
     if (tok) h.Authorization = 'Bearer ' + tok; if (o.body) h['Content-Type'] = 'application/json';
     return fetch('https://api.github.com/repos/' + rp + '/contents/' + path, { method: o.method || 'GET', headers: h, body: o.body ? JSON.stringify(o.body) : undefined, cache: 'no-store' });
   }
-  function fail(r, what) { return new Error(what + ': ' + (r.status === 401 ? 'التوكن غلط أو منتهي' : r.status === 403 ? 'GitHub رفض (التوكن محتاج صلاحية Contents: Read and write، أو الطلبات زادت عن الحد)' : r.status === 404 ? 'الـ repo أو الصلاحية مش موجودة' : 'خطأ ' + r.status)); }
+  async function fail(r, what) {
+    var j = {}; try { j = await r.json(); } catch (e) { }
+    return new Error(what + ' (' + r.status + '): ' + (r.status === 401 ? 'التوكن غلط أو منتهي' : r.status === 403 ? 'GitHub رفض: التوكن محتاج Contents = Read and write على الـ repo ده، أو الطلبات زادت عن الحد' : r.status === 404 ? 'الـ repo أو صلاحية التوكن عليه مش موجودة' : 'خطأ') + (j.message ? ' — ' + j.message : ''));
+  }
 
   async function run(silent) {
-    if (busy) return; busy = true;
+    if (busy) return; busy = true; if (msgEl) msgEl.style.display = 'none';
     var S = window.MMProjects && window.MMProjects.Store, set = function (t) { if (btn) btn.textContent = t; };
     try {
       if (!S) throw new Error('التطبيق لسه بيحمّل');
@@ -4820,7 +4823,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
       set('⏳ بجيب اللي على GitHub…');
       var lr = await gh(rp, DIR, 0, tok);
       if (lr.ok) (await lr.json()).forEach(function (f) { var m = NAME.exec(f.name); if (!m) return; var x = rem[m[1]] || (rem[m[1]] = { ts: 0, files: [] }); x.files.push(f); if (+m[2] > x.ts) { x.ts = +m[2]; x.name = f.name; } });
-      else if (lr.status !== 404) throw fail(lr, 'قراءة GitHub');
+      else if (lr.status !== 404) throw await fail(lr, 'قراءة GitHub');
       (await S.listMeta()).forEach(function (m) { lm[m.id] = m; });
       Object.keys(lm).concat(Object.keys(rem).filter(function (i) { return !lm[i]; })).forEach(function (id) {
         var l = lm[id], r = rem[id], lt = l ? l.updatedAt || 0 : 0, rt = r ? r.ts : 0;
@@ -4834,7 +4837,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
       for (var p of plan) {
         var act = p[0], id = p[1], l = lm[id], r = rem[id]; set('⏳ ' + (++i) + '/' + plan.length);
         if (act !== 'up') {
-          var rb = await gh(rp, DIR + '/' + encodeURIComponent(r.name), { raw: 1 }, tok); if (!rb.ok) throw fail(rb, 'تنزيل مشروع');
+          var rb = await gh(rp, DIR + '/' + encodeURIComponent(r.name), { raw: 1 }, tok); if (!rb.ok) throw await fail(rb, 'تنزيل مشروع');
           var o; try { o = await unpack(K, await rb.arrayBuffer()); } catch (e) { $('pass', null); throw new Error('كلمة السر غلط (أو الملف تالف). اضغط تاني وأدخل الكلمة الصح.'); }
           if (act === 'dn') { await S.putNew(Object.assign({}, o.meta, { updatedAt: r.ts }), o.data); seen[id] = r.ts; st.dn++; continue; }
           var now = Date.now(); /* تعارض: النسختين اتعدلوا. نسخة الجهاز التاني بتتحفظ كمشروع جديد، ونسخة الجهاز ده فاضلة وبتترفع */
@@ -4844,7 +4847,8 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
         if (!tok) { st.sk++; continue; }
         var c2 = await S.loadProject(id); if (!c2.data) continue;
         var nm = id + '.' + l.updatedAt + '.enc', pr = await gh(rp, DIR + '/' + encodeURIComponent(nm), { method: 'PUT', body: { message: 'mm-sync', content: b64(await pack(K, { meta: l, data: c2.data })) } }, tok);
-        if (pr.status === 401) $('tok', null); if (!pr.ok && pr.status !== 422) throw fail(pr, 'رفع مشروع');
+        if (pr.status === 401) $('tok', null);
+        if (!pr.ok) { var pe = await fail(pr, 'رفع مشروع'); if (!(pr.status === 422 && /sha/i.test(pe.message))) throw pe; }
         for (var f of ((r && r.files) || [])) if (f.name !== nm) { try { await gh(rp, DIR + '/' + encodeURIComponent(f.name), { method: 'DELETE', body: { message: 'mm-sync', sha: f.sha } }, tok); } catch (e) { } }
         seen[id] = l.updatedAt; st.up++;
       }
@@ -4854,7 +4858,7 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
       var pj = document.getElementById('mmProjects');
       if ((st.dn || st.cf) && pj && pj.classList.contains('on')) setTimeout(function () { location.reload(); }, 1200); else setTimeout(reset, 4000);
     } catch (e) {
-      var msg = (e && e.message) || String(e); set('⚠️ فشلت المزامنة');
+      var msg = (e && e.message) || String(e); if (/Failed to fetch|NetworkError|Load failed/i.test(msg)) msg += ' (مشكلة اتصال، أو الملف كبير على الموبايل)'; set('⚠️ فشلت المزامنة'); if (msgEl) { msgEl.textContent = msg; msgEl.style.display = 'block'; }
       if (!silent) alert('المزامنة فشلت:\n' + msg + (navigator.onLine ? '' : '\n(مفيش نت)')); setTimeout(reset, 6000);
     } finally { busy = false; }
   }
@@ -4865,7 +4869,8 @@ window.MMProjects = { openProject, goPicker, newProject, flush, Store, saveCopy 
     btn = document.createElement('button'); btn.type = 'button'; btn.style.cssText = 'flex:1;padding:13px;font-size:16px;border:1.5px solid #1a73e8;border-radius:10px;background:#fff;color:#1a73e8;cursor:pointer'; btn.onclick = function () { run(false); };
     g.type = 'button'; g.textContent = '⚙'; g.title = 'مسح كلمة السر والتوكن من الجهاز ده'; g.style.cssText = 'padding:0 16px;font-size:18px;border:1.5px solid #ccd3df;border-radius:10px;background:#fff;color:#666;cursor:pointer';
     g.onclick = function () { if (confirm('مسح كلمة السر والتوكن من الجهاز ده؟ (مشاريعك مش هتتمسح)')) ['pass', 'tok', 'notok', 'seen'].forEach(function (k) { $(k, null); }); };
-    reset(); bar.appendChild(btn); bar.appendChild(g); nb.parentNode.insertBefore(bar, nb.nextSibling); return true;
+    reset(); bar.appendChild(btn); bar.appendChild(g); nb.parentNode.insertBefore(bar, nb.nextSibling);
+    msgEl = document.createElement('div'); msgEl.style.cssText = 'display:none;margin:-6px 0 14px;font-size:12px;line-height:1.6;color:#b71c1c;background:#fdecea;border:1px solid #f5c6cb;border-radius:8px;padding:8px 10px;word-break:break-word;direction:rtl;user-select:text'; bar.parentNode.insertBefore(msgEl, bar.nextSibling); return true;
   }
   setInterval(mount, 2000);
   var tries = 0, t0 = setInterval(function () {
